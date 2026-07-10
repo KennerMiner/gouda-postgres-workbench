@@ -7,6 +7,7 @@ pub fn run() {
         .manage(db::Connections::default())
         .invoke_handler(tauri::generate_handler![
             db::connect,
+            db::cancel_query,
             db::disconnect,
             db::list_objects,
             db::run_query

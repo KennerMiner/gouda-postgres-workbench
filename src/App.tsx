@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import Editor from "./Editor";
+import Grid, { type ColumnMeta } from "./Grid";
 import "./App.css";
-
-type ColumnMeta = { name: string; typeName: string; typeOid: number };
 
 type QueryEvent =
   | { kind: "meta"; columns: ColumnMeta[] }
@@ -16,17 +16,6 @@ type DbObject = { schema: string; name: string; kind: string };
 const DEFAULT_DSN = "postgres://heroage:heroage@localhost:5432/heroage";
 const DEFAULT_SQL =
   "select table_name, table_type from information_schema.tables where table_schema = 'public' order by 1;";
-
-const NUMERIC_TYPES = new Set([
-  "int2",
-  "int4",
-  "int8",
-  "float4",
-  "float8",
-  "numeric",
-  "oid",
-  "money",
-]);
 
 const KIND_ICON: Record<string, string> = {
   table: "▦",
@@ -129,7 +118,20 @@ function App() {
     [conn],
   );
 
+  // Toolbar Run: whole editor content as one statement batch is not supported
+  // yet, so run the statement under the cursor's home — i.e. the full text if
+  // it is a single statement, else the first. The editor's ⌘↵ handles
+  // statement-under-cursor precisely.
   const run = useCallback(() => runSql(sql), [runSql, sql]);
+
+  const stop = useCallback(async () => {
+    if (!conn) return;
+    try {
+      await invoke("cancel_query", { connId: conn.connId });
+    } catch {
+      // Cancellation is best-effort; the running query surfaces the error.
+    }
+  }, [conn]);
 
   const openObject = useCallback(
     (o: DbObject) => {
@@ -141,13 +143,6 @@ function App() {
     },
     [runSql],
   );
-
-  const onEditorKey = (e: React.KeyboardEvent) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-      e.preventDefault();
-      if (!running && conn) run();
-    }
-  };
 
   const schemas = useMemo(() => {
     const f = filter.trim().toLowerCase();
@@ -175,8 +170,6 @@ function App() {
       ? "not connected"
       : "connecting…";
 
-  const align = (c: ColumnMeta) => (NUMERIC_TYPES.has(c.typeName) ? "num" : "");
-
   return (
     <div className="app">
       <div className="titlebar" data-tauri-drag-region>
@@ -191,9 +184,15 @@ function App() {
         <button className="btn" onClick={doConnect} title="Connect (↵ in DSN field)">
           {conn ? "Reconnect" : "Connect"}
         </button>
-        <button className="btn run" onClick={run} disabled={running || !conn} title="Run (⌘↵)">
-          {running ? "Running…" : "▶ Run"}
-        </button>
+        {running ? (
+          <button className="btn stop" onClick={stop} title="Cancel query">
+            ■ Stop
+          </button>
+        ) : (
+          <button className="btn run" onClick={run} disabled={!conn} title="Run (⌘↵)">
+            ▶ Run
+          </button>
+        )}
       </div>
 
       <div className={`conn-banner ${conn ? "" : "disconnected"}`}>{banner}</div>
@@ -237,49 +236,20 @@ function App() {
         </div>
 
         <div className="main">
-          <textarea
-            className="editor"
-            value={sql}
-            onChange={(e) => setSql(e.target.value)}
-            onKeyDown={onEditorKey}
-            spellCheck={false}
-          />
+          <div className="editor-pane">
+            <Editor value={sql} onChange={setSql} onRun={runSql} />
+          </div>
 
           <div className="results">
             {error ? (
               <div className="error-pane">{error}</div>
             ) : (
-              columns.length > 0 && (
-                <table>
-                  <thead>
-                    <tr>
-                      <th className="rownum" />
-                      {columns.map((c, i) => (
-                        <th key={i} className={align(c)} title={c.typeName}>
-                          {c.name}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((r, ri) => (
-                      <tr key={ri}>
-                        <td className="rownum">{ri + 1}</td>
-                        {r.map((cell, ci) => (
-                          <td key={ci} className={align(columns[ci])}>
-                            {renderCell(cell)}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )
+              columns.length > 0 && <Grid columns={columns} rows={rows} />
             )}
           </div>
 
           <div className="statusbar">
-            <span className="hint">Run: ⌘↵</span>
+            <span className="hint">Run statement: ⌘↵</span>
             <span className="rowcount">{running ? "running…" : status}</span>
             <span className="engine">
               {conn ? `PostgreSQL ${conn.serverVersion}` : "disconnected"}
@@ -289,12 +259,6 @@ function App() {
       </div>
     </div>
   );
-}
-
-function renderCell(v: unknown) {
-  if (v === null) return <span className="null">NULL</span>;
-  if (typeof v === "object") return <span className="json">{JSON.stringify(v)}</span>;
-  return String(v);
 }
 
 export default App;

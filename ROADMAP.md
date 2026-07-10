@@ -32,12 +32,15 @@ Personal daily driver, macOS-first.
 - [ ] Connection manager: profiles in SQLite, secrets in Keychain, SSL modes
 - [ ] SSH tunnel support (russh)
 - [ ] Connection pooling + one persistent session per tab (deadpool)
-- [ ] CodeMirror 6 editor: tabs, run-all / run-selection / run-statement-under-cursor
-- [ ] Query cancellation (tokio-postgres cancel_token) + timeout
-- [ ] Multi-statement scripts (simple_query path for non-preparable statements)
-- [ ] Schema tree: databases → schemas → tables/views/functions/types
-- [ ] Virtualized grid (TanStack Virtual): 100k rows without jank, cell selection,
-      JSONB/array cell expansion popover
+- [x] CodeMirror 6 editor: Postgres highlighting, ⌘↵ = run selection or
+      statement under cursor (string/dollar-quote/comment-aware splitter,
+      unit-tested)
+- [x] Query cancellation (out-of-band cancel_token, Stop button)
+- [x] Virtualized grid (TanStack Virtual): fixed 24px rows, content-measured
+      column widths, sticky header + row gutter
+- [ ] Editor tabs + run-all (multi-statement via simple_query)
+- [ ] Grid: cell selection, JSONB/array expansion popover, copy cell/row
+- [ ] Schema tree: add functions/types; column list under each table
 - [ ] Persistent searchable query history (SQLite)
 - [ ] Export: CSV / JSON / SQL inserts (COPY TO for big sets)
 

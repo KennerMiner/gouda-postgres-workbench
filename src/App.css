@@ -101,6 +101,16 @@ body,
   cursor: default;
 }
 
+.btn.stop {
+  border-color: var(--err);
+  color: var(--err);
+}
+
+.btn.stop:active {
+  background: var(--err);
+  color: #fff;
+}
+
 /* --- connection identity banner (the TablePlus signature) ---------------- */
 
 .conn-banner {
@@ -239,16 +249,24 @@ body,
 
 /* --- editor --------------------------------------------------------------- */
 
-.editor {
-  height: 148px;
-  padding: 10px 12px;
-  border: none;
+.editor-pane {
+  height: 160px;
+  min-height: 60px;
   border-bottom: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text);
-  font: 12px/1.55 var(--mono);
   resize: vertical;
-  outline: none;
+  overflow: hidden;
+}
+
+.editor-host {
+  height: 100%;
+}
+
+.editor-host .cm-editor {
+  height: 100%;
+}
+
+.editor-host .cm-scroller {
+  overflow: auto;
 }
 
 /* --- results grid ---------------------------------------------------------- */
@@ -266,62 +284,74 @@ body,
   white-space: pre-wrap;
 }
 
-.results table {
-  border-collapse: collapse;
-  width: max-content;
-  min-width: 100%;
-  font-size: 11.5px; /* system font, like TablePlus — mono is for the editor */
-  white-space: nowrap;
+.results {
+  display: flex;
+  flex-direction: column;
 }
 
-.results th,
-.results td {
+/* Virtualized grid: system font like TablePlus — mono is for the editor. */
+
+.grid-scroll {
+  flex: 1;
+  overflow: auto;
+  font-size: 11.5px;
+}
+
+.grid-header {
+  display: grid;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.grid-row {
+  display: grid;
+  position: absolute;
+  top: 0;
+  left: 0;
   height: 24px;
-  padding: 0 10px;
   border-bottom: 1px solid var(--border-faint);
-  text-align: left;
-  max-width: 440px;
+}
+
+.grid-row:hover .gc {
+  background: var(--bg-hover);
+}
+
+.gc {
+  height: 24px;
+  line-height: 23px;
+  padding: 0 10px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--bg);
 }
 
-.results th.num,
-.results td.num {
+.grid-header .gc {
+  background: var(--bg-header);
+  font-weight: 600;
+  font-size: 11px;
+  text-align: center;
+}
+
+.gc.num {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
-.results thead th {
-  position: sticky;
-  top: 0;
-  background: var(--bg-header);
-  border-bottom: 1px solid var(--border);
-  font-weight: 600;
-  font-size: 11px;
-  text-align: center;
-  z-index: 1;
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-.results tbody tr:hover td {
-  background: var(--bg-hover);
-}
-
-.rownum {
-  color: var(--text-dim);
-  text-align: right !important;
-  font-variant-numeric: tabular-nums;
-  min-width: 40px;
+.gc.gutter {
   position: sticky;
   left: 0;
-  background: var(--bg);
+  z-index: 1;
+  color: var(--text-dim);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
   -webkit-user-select: none;
   user-select: none;
-}
-
-thead .rownum {
-  background: var(--bg-header);
 }
 
 .null {

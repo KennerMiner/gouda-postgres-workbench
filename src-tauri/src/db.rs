@@ -115,6 +115,19 @@ pub async fn connect(state: State<'_, Connections>, dsn: String) -> Result<ConnI
     })
 }
 
+/// Cancel whatever is currently running on this connection. Postgres cancel
+/// goes out-of-band on a fresh socket, so this works while `run_query` is
+/// blocked streaming.
+#[tauri::command]
+pub async fn cancel_query(state: State<'_, Connections>, conn_id: u32) -> Result<(), String> {
+    let client = state.get(conn_id).await?;
+    client
+        .cancel_token()
+        .cancel_query(NoTls)
+        .await
+        .map_err(|e| format!("cancel: {e}"))
+}
+
 #[tauri::command]
 pub async fn disconnect(state: State<'_, Connections>, conn_id: u32) -> Result<(), String> {
     // Dropping the client closes the socket and ends the driver task.
