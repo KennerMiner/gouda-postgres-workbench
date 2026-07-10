@@ -640,6 +640,19 @@ body.row-resizing {
   white-space: pre-wrap;
 }
 
+.test-result {
+  font: 11px var(--mono);
+  white-space: pre-wrap;
+}
+
+.test-result.ok {
+  color: var(--green);
+}
+
+.test-result.fail {
+  color: var(--err);
+}
+
 .modal-actions {
   display: flex;
   gap: 8px;

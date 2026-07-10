@@ -107,8 +107,11 @@ pub struct DbObject {
 /// register it. Shared by ad-hoc DSN connect and profile connect.
 pub async fn open_config(
     state: &Connections,
-    config: tokio_postgres::Config,
+    mut config: tokio_postgres::Config,
 ) -> Result<ConnInfo, String> {
+    if config.get_connect_timeout().is_none() {
+        config.connect_timeout(std::time::Duration::from_secs(10));
+    }
     let (client, connection) = config
         .connect(NoTls)
         .await

@@ -26,6 +26,7 @@ pub fn run() {
             profiles::profiles_list,
             profiles::profile_save,
             profiles::profile_delete,
+            profiles::test_connection,
             profiles::connect_profile
         ])
         .run(tauri::generate_context!())

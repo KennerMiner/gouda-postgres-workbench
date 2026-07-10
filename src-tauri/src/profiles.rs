@@ -135,6 +135,42 @@ pub fn profile_delete(store: State<'_, Store>, profile_id: i64) -> Result<(), St
     Ok(())
 }
 
+/// Try the given form values without touching the active connection or the
+/// saved profile. `password: None` falls back to the Keychain secret for
+/// already-saved profiles (so "Test" works without retyping).
+#[tauri::command]
+pub async fn test_connection(profile: Profile, password: Option<String>) -> Result<String, String> {
+    let pw = match password {
+        Some(p) => Some(p),
+        None => match profile.id {
+            Some(id) => get_password(id)?,
+            None => None,
+        },
+    };
+
+    let mut config = tokio_postgres::Config::new();
+    config
+        .host(&profile.host)
+        .port(profile.port)
+        .dbname(&profile.dbname)
+        .user(&profile.username)
+        .connect_timeout(std::time::Duration::from_secs(5));
+    if let Some(p) = pw {
+        config.password(&p);
+    }
+
+    let (client, connection) = config.connect(tokio_postgres::NoTls).await.map_err(|e| format!("{e}"))?;
+    let handle = tokio::spawn(connection);
+    let row = client
+        .query_one("select current_setting('server_version')", &[])
+        .await
+        .map_err(|e| format!("{e}"))?;
+    let version: String = row.get(0);
+    drop(client);
+    let _ = handle.await;
+    Ok(format!("PostgreSQL {version}"))
+}
+
 /// Connect using a saved profile. The password is resolved from the Keychain
 /// in Rust — it never transits the frontend.
 #[tauri::command]

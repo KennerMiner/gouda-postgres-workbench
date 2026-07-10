@@ -31,6 +31,8 @@ type Props = {
   onSave: (profile: Profile, password: string | null) => Promise<Profile>;
   onDelete: (profileId: number) => Promise<void>;
   onConnect: (profile: Profile) => Promise<void>;
+  /** Tries the form values without switching connection; resolves to server version. */
+  onTest: (profile: Profile, password: string | null) => Promise<string>;
   onClose: () => void;
 };
 
@@ -40,6 +42,7 @@ export default function ConnectionModal({
   onSave,
   onDelete,
   onConnect,
+  onTest,
   onClose,
 }: Props) {
   const [form, setForm] = useState<Profile>(profiles[0] ?? BLANK);
@@ -47,6 +50,7 @@ export default function ConnectionModal({
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -58,9 +62,13 @@ export default function ConnectionModal({
     setForm(p);
     setPassword("");
     setErr("");
+    setTestResult(null);
   };
 
-  const set = <K extends keyof Profile>(k: K, v: Profile[K]) => setForm({ ...form, [k]: v });
+  const set = <K extends keyof Profile>(k: K, v: Profile[K]) => {
+    setForm({ ...form, [k]: v });
+    setTestResult(null); // stale test verdicts mislead
+  };
 
   const guard = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -73,6 +81,16 @@ export default function ConnectionModal({
       setBusy(false);
     }
   };
+
+  const test = () =>
+    guard(async () => {
+      try {
+        const version = await onTest(form, password || null);
+        setTestResult({ ok: true, msg: `✓ ${version}` });
+      } catch (e) {
+        setTestResult({ ok: false, msg: `✗ ${e}` });
+      }
+    });
 
   const save = () =>
     guard(async () => {
@@ -164,6 +182,9 @@ export default function ConnectionModal({
           </div>
 
           {err && <div className="modal-err">{err}</div>}
+          {testResult && (
+            <div className={`test-result ${testResult.ok ? "ok" : "fail"}`}>{testResult.msg}</div>
+          )}
 
           <div className="modal-actions">
             {form.id !== null && (
@@ -175,6 +196,13 @@ export default function ConnectionModal({
                 Delete
               </button>
             )}
+            <button
+              className="btn"
+              disabled={busy || !form.host || !form.dbname || !form.username}
+              onClick={test}
+            >
+              {busy ? "…" : "Test"}
+            </button>
             <span className="spacer" />
             <button className="btn" disabled={busy || !form.name} onClick={save}>
               Save

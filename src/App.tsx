@@ -108,6 +108,12 @@ function App() {
     [refreshProfiles],
   );
 
+  const testProfile = useCallback(
+    (p: Profile, password: string | null) =>
+      invoke<string>("test_connection", { profile: p, password }),
+    [],
+  );
+
   // Daily-driver behavior: connect to the most recently used profile on launch.
   useEffect(() => {
     (async () => {
@@ -301,6 +307,7 @@ function App() {
           onSave={saveProfile}
           onDelete={deleteProfile}
           onConnect={connectProfile}
+          onTest={testProfile}
           onClose={() => setShowConnections(false)}
         />
       )}
