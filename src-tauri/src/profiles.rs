@@ -232,12 +232,12 @@ pub async fn test_connection(profile: Profile, password: Option<String>) -> Resu
     let (client, connection) = config
         .connect(tokio_postgres::NoTls)
         .await
-        .map_err(|e| format!("{e}"))?;
+        .map_err(|e| crate::db::pg_err(&e))?;
     let handle = tokio::spawn(connection);
     let row = client
         .query_one("select current_setting('server_version')", &[])
         .await
-        .map_err(|e| format!("{e}"))?;
+        .map_err(|e| crate::db::pg_err(&e))?;
     let version: String = row.get(0);
     drop(client);
     let _ = handle.await;

@@ -70,6 +70,29 @@ impl Connections {
     }
 }
 
+/// Human-usable Postgres error: unwrap the DbError (message/detail/hint)
+/// instead of tokio-postgres's terse category Display ("db error").
+pub(crate) fn pg_err(e: &tokio_postgres::Error) -> String {
+    if let Some(db) = e.as_db_error() {
+        let mut s = format!("{}: {}", db.severity(), db.message());
+        if let Some(d) = db.detail() {
+            s.push_str(&format!("\n{d}"));
+        }
+        if let Some(h) = db.hint() {
+            s.push_str(&format!("\nhint: {h}"));
+        }
+        s
+    } else {
+        let mut s = e.to_string();
+        let mut src = std::error::Error::source(e);
+        while let Some(inner) = src {
+            s.push_str(&format!(": {inner}"));
+            src = std::error::Error::source(inner);
+        }
+        s
+    }
+}
+
 fn host_of(config: &tokio_postgres::Config) -> String {
     config
         .get_hosts()
@@ -215,7 +238,7 @@ pub async fn open_config(
     let (client, connection) = config
         .connect(NoTls)
         .await
-        .map_err(|e| format!("connect: {e}"))?;
+        .map_err(|e| format!("connect: {}", pg_err(&e)))?;
 
     // The connection object drives the socket; it must be polled on its own
     // task for the client handle to make progress.
@@ -231,7 +254,7 @@ pub async fn open_config(
             &[],
         )
         .await
-        .map_err(|e| format!("handshake: {e}"))?;
+        .map_err(|e| format!("handshake: {}", pg_err(&e)))?;
 
     let server_version: String = row.get(0);
     let user: String = row.get(1);
@@ -314,7 +337,7 @@ pub async fn list_objects(
             &[],
         )
         .await
-        .map_err(|e| format!("list objects: {e}"));
+        .map_err(|e| format!("list objects: {}", pg_err(&e)));
     match rows {
         Ok(rows) => Ok(rows
             .iter()
@@ -355,7 +378,7 @@ pub async fn run_query(
     let client = &entry.client;
 
     let result: Result<usize, String> = async {
-        let stmt = client.prepare(&sql).await.map_err(|e| format!("{e}"))?;
+        let stmt = client.prepare(&sql).await.map_err(|e| pg_err(&e))?;
 
         let columns: Vec<ColumnMeta> = stmt
             .columns()
@@ -376,13 +399,13 @@ pub async fn run_query(
         let stream = client
             .query_raw(&stmt, params)
             .await
-            .map_err(|e| format!("{e}"))?;
+            .map_err(|e| pg_err(&e))?;
         pin_mut!(stream);
 
         let mut batch: Vec<Vec<J>> = Vec::with_capacity(BATCH);
         let mut total = 0usize;
         while let Some(item) = stream.next().await {
-            let row = item.map_err(|e| format!("{e}"))?;
+            let row = item.map_err(|e| pg_err(&e))?;
             let mut out = Vec::with_capacity(ncols);
             for i in 0..ncols {
                 out.push(cell(&row, i));

@@ -114,14 +114,17 @@ pub async fn apply_edits(
     client
         .batch_execute("begin")
         .await
-        .map_err(|e| format!("begin: {e}"))?;
+        .map_err(|e| format!("begin: {}", crate::db::pg_err(&e)))?;
 
     for stmt in &statements {
         let n = match client.execute(stmt.as_str(), &[]).await {
             Ok(n) => n,
             Err(e) => {
                 let _ = client.batch_execute("rollback").await;
-                return Err(format!("{e}\n\nin: {stmt}\n\nrolled back — nothing applied"));
+                return Err(format!(
+                    "{}\n\nin: {stmt}\n\nrolled back — nothing applied",
+                    crate::db::pg_err(&e)
+                ));
             }
         };
         if n != 1 {
@@ -135,7 +138,7 @@ pub async fn apply_edits(
     client
         .batch_execute("commit")
         .await
-        .map_err(|e| format!("commit: {e}"))?;
+        .map_err(|e| format!("commit: {}", crate::db::pg_err(&e)))?;
 
     crate::history::record(
         &store,
