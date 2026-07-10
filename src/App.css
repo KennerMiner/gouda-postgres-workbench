@@ -399,10 +399,18 @@ body.row-resizing {
 
 /* Virtualized grid: system font like TablePlus — mono is for the editor. */
 
+.grid-wrap {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .grid-scroll {
   flex: 1;
   overflow: auto;
   font-size: 11.5px;
+  outline: none;
 }
 
 .grid-header {
@@ -451,6 +459,11 @@ body.row-resizing {
   font-variant-numeric: tabular-nums;
 }
 
+.gc.sel {
+  box-shadow: inset 0 0 0 2px var(--green);
+  border-radius: 2px;
+}
+
 .gc.gutter {
   position: sticky;
   left: 0;
@@ -471,6 +484,145 @@ body.row-resizing {
   color: var(--json);
   font-family: var(--mono);
   font-size: 11px;
+}
+
+/* --- cell inspector ---------------------------------------------------------- */
+
+.inspector {
+  display: flex;
+  flex-direction: column;
+  width: 340px;
+  min-width: 240px;
+  border-left: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+
+.inspector-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-faint);
+}
+
+.inspector-col {
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-type {
+  font-size: 10px;
+  color: var(--text-dim);
+  background: var(--bg);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.inspector-close {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.inspector-close:hover {
+  color: var(--text);
+}
+
+.inspector-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-faint);
+}
+
+.inspector-tools .spacer {
+  flex: 1;
+}
+
+.btn.mini {
+  padding: 2px 8px;
+  font-size: 10.5px;
+}
+
+.inspector-body {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 10px;
+}
+
+.inspector-text {
+  margin: 0;
+  font: 11px/1.5 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* --- json tree ---------------------------------------------------------------- */
+
+.json-tree {
+  font: 11px/1.6 var(--mono);
+}
+
+.jt-row {
+  display: flex;
+  align-items: baseline;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.jt-toggle {
+  cursor: default;
+}
+
+.jt-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.jt-chevron {
+  display: inline-block;
+  width: 12px;
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: 10px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.jt-key {
+  color: #6fb3e0;
+}
+
+.jt-str {
+  color: #9ece6a;
+}
+
+.jt-num {
+  color: #d9a05f;
+}
+
+.jt-bool {
+  color: #b58fd4;
+}
+
+.jt-null {
+  color: var(--null);
+  font-style: italic;
+}
+
+.jt-brace {
+  color: var(--text-dim);
+}
+
+.jt-summary {
+  color: var(--text-dim);
+  font-style: italic;
 }
 
 /* --- connection manager modal ---------------------------------------------- */
