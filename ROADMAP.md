@@ -32,7 +32,9 @@ Personal daily driver, macOS-first.
 - [x] Connection manager: profiles in SQLite, passwords in macOS Keychain,
       manager modal, per-profile banner colors, auto-connect most recent,
       'heroage local' seeded on first run (SSL modes still TODO)
-- [ ] SSH tunnel support (russh)
+- [x] SSH tunnel support (russh): agent + key-file auth, known_hosts
+      verification, tunnel lifetime tied to connection; per-profile SSH
+      section in the manager; end-to-end test against the dev bastion
 - [ ] Connection pooling + one persistent session per tab (deadpool)
 - [x] CodeMirror 6 editor: Postgres highlighting, ⌘↵ = run selection or
       statement under cursor (string/dollar-quote/comment-aware splitter,

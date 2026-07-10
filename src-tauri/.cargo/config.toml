@@ -1,0 +1,4 @@
+# Sign dev binaries before running so Keychain ACLs stick across rebuilds.
+# See scripts/dev-run.sh.
+[target.aarch64-apple-darwin]
+runner = "/Users/kminer/verslabs/psqlViewer/scripts/dev-run.sh"

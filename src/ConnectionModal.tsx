@@ -9,6 +9,12 @@ export type Profile = {
   username: string;
   color: string;
   lastUsedAt: number | null;
+  sshEnabled: boolean;
+  sshHost: string;
+  sshPort: number;
+  sshUser: string;
+  /** Empty = SSH agent / default key files. */
+  sshKeyPath: string;
 };
 
 export const PROFILE_COLORS = ["green", "blue", "purple", "amber", "red"] as const;
@@ -22,6 +28,11 @@ const BLANK: Profile = {
   username: "",
   color: "green",
   lastUsedAt: null,
+  sshEnabled: false,
+  sshHost: "",
+  sshPort: 22,
+  sshUser: "",
+  sshKeyPath: "",
 };
 
 type Props = {
@@ -169,6 +180,56 @@ export default function ConnectionModal({
               placeholder={form.id !== null ? "•••••• (unchanged)" : ""}
             />
           </label>
+          <label className="ssh-toggle">
+            <span className="ssh-toggle-row">
+              <input
+                type="checkbox"
+                checked={form.sshEnabled}
+                onChange={(e) => set("sshEnabled", e.target.checked)}
+              />
+              Connect via SSH tunnel
+            </span>
+          </label>
+          {form.sshEnabled && (
+            <div className="ssh-fields">
+              <div className="form-row">
+                <label className="grow">
+                  SSH host
+                  <input
+                    value={form.sshHost}
+                    onChange={(e) => set("sshHost", e.target.value)}
+                    spellCheck={false}
+                  />
+                </label>
+                <label className="port">
+                  Port
+                  <input
+                    value={form.sshPort}
+                    onChange={(e) => set("sshPort", Number(e.target.value.replace(/\D/g, "")) || 0)}
+                    spellCheck={false}
+                  />
+                </label>
+              </div>
+              <label>
+                SSH user
+                <input
+                  value={form.sshUser}
+                  onChange={(e) => set("sshUser", e.target.value)}
+                  spellCheck={false}
+                />
+              </label>
+              <label>
+                Key file
+                <input
+                  value={form.sshKeyPath}
+                  onChange={(e) => set("sshKeyPath", e.target.value)}
+                  placeholder="ssh agent / default keys"
+                  spellCheck={false}
+                />
+              </label>
+            </div>
+          )}
+
           <div className="color-row">
             {PROFILE_COLORS.map((c) => (
               <span
@@ -198,7 +259,13 @@ export default function ConnectionModal({
             )}
             <button
               className="btn"
-              disabled={busy || !form.host || !form.dbname || !form.username}
+              disabled={
+                busy ||
+                !form.host ||
+                !form.dbname ||
+                !form.username ||
+                (form.sshEnabled && (!form.sshHost || !form.sshUser))
+              }
               onClick={test}
             >
               {busy ? "…" : "Test"}
@@ -209,7 +276,13 @@ export default function ConnectionModal({
             </button>
             <button
               className="btn primary"
-              disabled={busy || !form.name || !form.dbname || !form.username}
+              disabled={
+                busy ||
+                !form.name ||
+                !form.dbname ||
+                !form.username ||
+                (form.sshEnabled && (!form.sshHost || !form.sshUser))
+              }
               onClick={connect}
             >
               {busy ? "Connecting…" : "Connect"}

@@ -2,6 +2,7 @@ mod db;
 mod history;
 mod profiles;
 mod store;
+mod tunnel;
 
 use tauri::Manager;
 

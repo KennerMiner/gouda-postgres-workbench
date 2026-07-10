@@ -31,4 +31,5 @@ uuid = { version = "1", features = ["v4"] }
 futures = "0.3"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 keyring = { version = "3", features = ["apple-native"] }
+russh = "0.62.2"
 

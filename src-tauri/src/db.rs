@@ -23,10 +23,12 @@ use tokio_postgres::{types::ToSql, Client, NoTls, Row};
 const BATCH: usize = 500;
 
 /// An open client plus a human-readable identity (`user@host/db`) used to
-/// label history entries.
+/// label history entries. Holds its SSH tunnel (if any) so the tunnel lives
+/// exactly as long as the connection.
 pub struct ConnEntry {
     client: Client,
     label: String,
+    _tunnel: Option<crate::tunnel::Tunnel>,
 }
 
 #[derive(Default)]
@@ -108,6 +110,7 @@ pub struct DbObject {
 pub async fn open_config(
     state: &Connections,
     mut config: tokio_postgres::Config,
+    tunnel: Option<crate::tunnel::Tunnel>,
 ) -> Result<ConnInfo, String> {
     if config.get_connect_timeout().is_none() {
         config.connect_timeout(std::time::Duration::from_secs(10));
@@ -139,11 +142,14 @@ pub async fn open_config(
 
     let conn_id = state.next_id.fetch_add(1, Ordering::Relaxed) + 1;
     let label = format!("{user}@{}/{database}", host_of(&config));
-    state
-        .map
-        .lock()
-        .await
-        .insert(conn_id, Arc::new(ConnEntry { client, label }));
+    state.map.lock().await.insert(
+        conn_id,
+        Arc::new(ConnEntry {
+            client,
+            label,
+            _tunnel: tunnel,
+        }),
+    );
 
     Ok(ConnInfo {
         conn_id,
@@ -158,7 +164,7 @@ pub async fn connect(state: State<'_, Connections>, dsn: String) -> Result<ConnI
     let config = dsn
         .parse::<tokio_postgres::Config>()
         .map_err(|e| format!("dsn: {e}"))?;
-    open_config(&state, config).await
+    open_config(&state, config, None).await
 }
 
 /// Cancel whatever is currently running on this connection. Postgres cancel

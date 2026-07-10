@@ -45,6 +45,64 @@ pub struct Profile {
     pub username: String,
     pub color: String,
     pub last_used_at: Option<i64>,
+    #[serde(default)]
+    pub ssh_enabled: bool,
+    #[serde(default)]
+    pub ssh_host: String,
+    #[serde(default = "default_ssh_port")]
+    pub ssh_port: u16,
+    #[serde(default)]
+    pub ssh_user: String,
+    /// Empty = use SSH agent, then default key files.
+    #[serde(default)]
+    pub ssh_key_path: String,
+}
+
+fn default_ssh_port() -> u16 {
+    22
+}
+
+/// Build the Postgres config (and tunnel, when SSH is enabled) for a profile.
+async fn prepare(
+    profile: &Profile,
+    password: Option<String>,
+) -> Result<(tokio_postgres::Config, Option<crate::tunnel::Tunnel>), String> {
+    let mut tunnel = None;
+    let (host, port) = if profile.ssh_enabled {
+        let key_path = profile.ssh_key_path.trim();
+        let key_path = if key_path.is_empty() {
+            None
+        } else {
+            Some(key_path.replacen('~', &std::env::var("HOME").unwrap_or_default(), 1))
+        };
+        let t = crate::tunnel::open(
+            crate::tunnel::SshParams {
+                host: profile.ssh_host.clone(),
+                port: profile.ssh_port,
+                user: profile.ssh_user.clone(),
+                key_path,
+            },
+            profile.host.clone(),
+            profile.port,
+        )
+        .await?;
+        let local = t.local_port;
+        tunnel = Some(t);
+        ("127.0.0.1".to_string(), local)
+    } else {
+        (profile.host.clone(), profile.port)
+    };
+
+    let mut config = tokio_postgres::Config::new();
+    config
+        .host(&host)
+        .port(port)
+        .dbname(&profile.dbname)
+        .user(&profile.username);
+    if let Some(pw) = password {
+        config.password(&pw);
+    }
+    Ok((config, tunnel))
 }
 
 #[tauri::command]
@@ -52,7 +110,8 @@ pub fn profiles_list(store: State<'_, Store>) -> Result<Vec<Profile>, String> {
     let conn = store.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "select id, name, host, port, dbname, username, color, last_used_at
+            "select id, name, host, port, dbname, username, color, last_used_at,
+                    ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_key_path
              from profiles order by last_used_at desc nulls last, name",
         )
         .map_err(|e| e.to_string())?;
@@ -67,6 +126,11 @@ pub fn profiles_list(store: State<'_, Store>) -> Result<Vec<Profile>, String> {
                 username: r.get(5)?,
                 color: r.get(6)?,
                 last_used_at: r.get(7)?,
+                ssh_enabled: r.get(8)?,
+                ssh_host: r.get(9)?,
+                ssh_port: r.get(10)?,
+                ssh_user: r.get(11)?,
+                ssh_key_path: r.get(12)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -88,8 +152,10 @@ pub fn profile_save(
         Some(id) => {
             conn.execute(
                 "update profiles
-                 set name = ?1, host = ?2, port = ?3, dbname = ?4, username = ?5, color = ?6
-                 where id = ?7",
+                 set name = ?1, host = ?2, port = ?3, dbname = ?4, username = ?5, color = ?6,
+                     ssh_enabled = ?7, ssh_host = ?8, ssh_port = ?9, ssh_user = ?10,
+                     ssh_key_path = ?11
+                 where id = ?12",
                 rusqlite::params![
                     profile.name,
                     profile.host,
@@ -97,6 +163,11 @@ pub fn profile_save(
                     profile.dbname,
                     profile.username,
                     profile.color,
+                    profile.ssh_enabled,
+                    profile.ssh_host,
+                    profile.ssh_port,
+                    profile.ssh_user,
+                    profile.ssh_key_path,
                     id
                 ],
             )
@@ -105,15 +176,21 @@ pub fn profile_save(
         }
         None => {
             conn.execute(
-                "insert into profiles (name, host, port, dbname, username, color)
-                 values (?1, ?2, ?3, ?4, ?5, ?6)",
+                "insert into profiles (name, host, port, dbname, username, color,
+                                       ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_key_path)
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 rusqlite::params![
                     profile.name,
                     profile.host,
                     profile.port,
                     profile.dbname,
                     profile.username,
-                    profile.color
+                    profile.color,
+                    profile.ssh_enabled,
+                    profile.ssh_host,
+                    profile.ssh_port,
+                    profile.ssh_user,
+                    profile.ssh_key_path
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -148,18 +225,14 @@ pub async fn test_connection(profile: Profile, password: Option<String>) -> Resu
         },
     };
 
-    let mut config = tokio_postgres::Config::new();
-    config
-        .host(&profile.host)
-        .port(profile.port)
-        .dbname(&profile.dbname)
-        .user(&profile.username)
-        .connect_timeout(std::time::Duration::from_secs(5));
-    if let Some(p) = pw {
-        config.password(&p);
-    }
+    // _tunnel must outlive the client so the bridge stays up for the handshake.
+    let (mut config, _tunnel) = prepare(&profile, pw).await?;
+    config.connect_timeout(std::time::Duration::from_secs(5));
 
-    let (client, connection) = config.connect(tokio_postgres::NoTls).await.map_err(|e| format!("{e}"))?;
+    let (client, connection) = config
+        .connect(tokio_postgres::NoTls)
+        .await
+        .map_err(|e| format!("{e}"))?;
     let handle = tokio::spawn(connection);
     let row = client
         .query_one("select current_setting('server_version')", &[])
@@ -168,7 +241,8 @@ pub async fn test_connection(profile: Profile, password: Option<String>) -> Resu
     let version: String = row.get(0);
     drop(client);
     let _ = handle.await;
-    Ok(format!("PostgreSQL {version}"))
+    let via = if profile.ssh_enabled { " (via SSH)" } else { "" };
+    Ok(format!("PostgreSQL {version}{via}"))
 }
 
 /// Connect using a saved profile. The password is resolved from the Keychain
@@ -184,34 +258,34 @@ pub async fn connect_profile(
         let conn = store.0.lock().map_err(|e| e.to_string())?;
         let profile = conn
             .query_row(
-                "select name, host, port, dbname, username from profiles where id = ?1",
+                "select id, name, host, port, dbname, username, color, last_used_at,
+                        ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_key_path
+                 from profiles where id = ?1",
                 [profile_id],
                 |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, u16>(2)?,
-                        r.get::<_, String>(3)?,
-                        r.get::<_, String>(4)?,
-                    ))
+                    Ok(Profile {
+                        id: r.get(0)?,
+                        name: r.get(1)?,
+                        host: r.get(2)?,
+                        port: r.get(3)?,
+                        dbname: r.get(4)?,
+                        username: r.get(5)?,
+                        color: r.get(6)?,
+                        last_used_at: r.get(7)?,
+                        ssh_enabled: r.get(8)?,
+                        ssh_host: r.get(9)?,
+                        ssh_port: r.get(10)?,
+                        ssh_user: r.get(11)?,
+                        ssh_key_path: r.get(12)?,
+                    })
                 },
             )
             .map_err(|e| format!("profile: {e}"))?;
         (profile, get_password(profile_id)?)
     };
-    let (_name, host, port, dbname, username) = profile;
 
-    let mut config = tokio_postgres::Config::new();
-    config
-        .host(&host)
-        .port(port)
-        .dbname(&dbname)
-        .user(&username);
-    if let Some(pw) = password {
-        config.password(&pw);
-    }
-
-    let info = crate::db::open_config(&connections, config).await?;
+    let (config, tunnel) = prepare(&profile, password).await?;
+    let info = crate::db::open_config(&connections, config, tunnel).await?;
 
     let conn = store.0.lock().map_err(|e| e.to_string())?;
     conn.execute(

@@ -36,6 +36,17 @@ impl Store {
              );",
         )?;
 
+        // Additive migrations: ignore "duplicate column" on re-run.
+        for stmt in [
+            "alter table profiles add column ssh_enabled integer not null default 0",
+            "alter table profiles add column ssh_host text not null default ''",
+            "alter table profiles add column ssh_port integer not null default 22",
+            "alter table profiles add column ssh_user text not null default ''",
+            "alter table profiles add column ssh_key_path text not null default ''",
+        ] {
+            let _ = conn.execute(stmt, []);
+        }
+
         // First run: seed the local dev profile so the app stays a
         // zero-config daily driver. Password goes to the Keychain.
         let empty: bool =
