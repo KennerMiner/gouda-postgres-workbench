@@ -12,11 +12,13 @@ export type EditableInfo = {
   editableCols: boolean[];
 };
 
-export type CellEdit = {
-  column: string;
-  castType: string;
-  value: string | null;
-  pk: { column: string; castType: string; value: string }[];
+type PkVal = { column: string; castType: string; value: string };
+type InsertCell = { column: string; castType: string; value: string | null };
+
+export type ChangeSet = {
+  edits: { column: string; castType: string; value: string | null; pk: PkVal[] }[];
+  deletes: { pk: PkVal[] }[];
+  inserts: { cells: InsertCell[] }[];
 };
 
 const ROW_H = 24;
@@ -54,21 +56,26 @@ type Props = {
   columns: ColumnMeta[];
   rows: unknown[][];
   editable: EditableInfo | null;
-  applyEdits: (
+  applyChanges: (
     schema: string,
     table: string,
-    edits: CellEdit[],
+    changes: ChangeSet,
     dryRun: boolean,
   ) => Promise<string[]>;
   refresh: () => void;
 };
 
-export default function Grid({ columns, rows, editable, applyEdits, refresh }: Props) {
+export default function Grid({ columns, rows, editable, applyChanges, refresh }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [sel, setSel] = useState<Sel | null>(null);
   const [inspecting, setInspecting] = useState(false);
-  // Staged cell edits, keyed "row|col". null = SET NULL.
+  // Staged cell edits on existing rows, keyed "row|col". null = SET NULL.
   const [edits, setEdits] = useState<Map<string, string | null>>(new Map());
+  // Row indices staged for deletion.
+  const [deletes, setDeletes] = useState<Set<number>>(new Set());
+  // Pending new rows: per row, colIdx -> value (null = explicit NULL;
+  // missing = column DEFAULT).
+  const [inserts, setInserts] = useState<Map<number, string | null>[]>([]);
   const [editing, setEditing] = useState<Sel | null>(null);
   const [editText, setEditText] = useState("");
   const [preview, setPreview] = useState<string[] | null>(null);
@@ -80,13 +87,18 @@ export default function Grid({ columns, rows, editable, applyEdits, refresh }: P
     setSel(null);
     setInspecting(false);
     setEdits(new Map());
+    setDeletes(new Set());
+    setInserts([]);
     setEditing(null);
     setPreview(null);
     setApplyErr("");
   }, [columns]);
 
+  const total = rows.length + inserts.length;
+  const isInsertRow = (r: number) => r >= rows.length;
+
   const virtualizer = useVirtualizer({
-    count: rows.length,
+    count: total,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ROW_H,
     overscan: 20,
@@ -106,7 +118,7 @@ export default function Grid({ columns, rows, editable, applyEdits, refresh }: P
     return w.map((chars) => Math.max(MIN_COL, Math.min(MAX_COL, chars * CHAR_W + 21)));
   }, [columns, rows]);
 
-  const gutterW = Math.max(40, String(rows.length).length * 8 + 18);
+  const gutterW = Math.max(40, String(total).length * 8 + 18);
   const template = `${gutterW}px ${widths.map((w) => `${w}px`).join(" ")}`;
   const totalW = gutterW + widths.reduce((a, b) => a + b, 0);
 
@@ -130,19 +142,25 @@ export default function Grid({ columns, rows, editable, applyEdits, refresh }: P
   const move = useCallback(
     (dr: number, dc: number) => {
       setSel((prev) => {
-        const r = Math.max(0, Math.min(rows.length - 1, (prev?.r ?? 0) + dr));
+        const r = Math.max(0, Math.min(total - 1, (prev?.r ?? 0) + dr));
         const c = Math.max(0, Math.min(columns.length - 1, (prev?.c ?? 0) + dc));
         ensureVisible(r, c);
         return { r, c };
       });
     },
-    [rows.length, columns.length, ensureVisible],
+    [total, columns.length, ensureVisible],
   );
 
   const stagedKey = (r: number, c: number) => `${r}|${c}`;
 
   /** The value a cell currently shows: staged if present, else original. */
   const displayValue = (r: number, c: number): unknown => {
+    if (isInsertRow(r)) {
+      const m = inserts[r - rows.length];
+      if (!m || !m.has(c)) return undefined; // DEFAULT
+      const v = m.get(c)!;
+      return v;
+    }
     const key = stagedKey(r, c);
     if (!edits.has(key)) return rows[r][c];
     const staged = edits.get(key)!;
@@ -164,6 +182,14 @@ export default function Grid({ columns, rows, editable, applyEdits, refresh }: P
 
   const stage = useCallback(
     (r: number, c: number, value: string | null) => {
+      if (isInsertRow(r)) {
+        setInserts((prev) => {
+          const next = prev.map((m) => new Map(m));
+          next[r - rows.length].set(c, value);
+          return next;
+        });
+        return;
+      }
       setEdits((prev) => {
         const next = new Map(prev);
         const key = stagedKey(r, c);
@@ -174,12 +200,19 @@ export default function Grid({ columns, rows, editable, applyEdits, refresh }: P
         return next;
       });
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [rows],
   );
 
   const startEdit = useCallback(
     (r: number, c: number) => {
       if (!canEditCol(c)) return;
+      if (isInsertRow(r)) {
+        const m = inserts[r - rows.length];
+        setEditing({ r, c });
+        setEditText(m?.has(c) ? (m.get(c) ?? "") : "");
+        return;
+      }
       const v = rows[r][c];
       // JSON/object cells edit in the inspector, not a 24px input.
       if (typeof v === "object" && v !== null) {
@@ -193,29 +226,84 @@ export default function Grid({ columns, rows, editable, applyEdits, refresh }: P
       setEditText(edits.has(key) ? (staged ?? "") : v === null ? "" : String(v));
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rows, edits, editable],
+    [rows, edits, inserts, editable],
   );
 
-  const buildEdits = (): CellEdit[] =>
-    [...edits.entries()].map(([key, value]) => {
-      const [r, c] = key.split("|").map(Number);
-      return {
-        column: columns[c].name,
-        castType: columns[c].typeName,
-        value,
-        pk: editable!.pkIndices.map((pi) => ({
-          column: columns[pi].name,
-          castType: columns[pi].typeName,
-          value: rawText(rows[r][pi]),
-        })),
-      };
+  const addRow = () => {
+    setInserts((prev) => [...prev, new Map()]);
+    requestAnimationFrame(() => virtualizer.scrollToIndex(total, { align: "end" }));
+  };
+
+  const toggleDelete = (r: number) => {
+    setDeletes((prev) => {
+      const next = new Set(prev);
+      if (next.has(r)) next.delete(r);
+      else next.add(r);
+      return next;
     });
+  };
+
+  const removeInsertRow = (i: number) =>
+    setInserts((prev) => prev.filter((_, idx) => idx !== i));
+
+  const pkOf = (r: number): PkVal[] =>
+    editable!.pkIndices.map((pi) => ({
+      column: columns[pi].name,
+      castType: columns[pi].typeName,
+      value: rawText(rows[r][pi]),
+    }));
+
+  const buildChanges = (): ChangeSet => ({
+    edits: [...edits.entries()]
+      .filter(([key]) => !deletes.has(Number(key.split("|")[0])))
+      .map(([key, value]) => {
+        const [r, c] = key.split("|").map(Number);
+        return {
+          column: columns[c].name,
+          castType: columns[c].typeName,
+          value,
+          pk: pkOf(r),
+        };
+      }),
+    deletes: [...deletes].map((r) => ({ pk: pkOf(r) })),
+    inserts: inserts.map((m) => ({
+      cells: [...m.entries()]
+        .filter(([c]) => canEditCol(c))
+        .map(([c, value]) => ({
+          column: columns[c].name,
+          castType: columns[c].typeName,
+          value,
+        })),
+    })),
+  });
+
+  const changeCount =
+    [...edits.keys()].filter((key) => !deletes.has(Number(key.split("|")[0]))).length +
+    deletes.size +
+    inserts.length;
+
+  const changeSummary = () => {
+    const parts: string[] = [];
+    const editCount = [...edits.keys()].filter(
+      (key) => !deletes.has(Number(key.split("|")[0])),
+    ).length;
+    if (editCount) parts.push(`${editCount} edit${editCount === 1 ? "" : "s"}`);
+    if (deletes.size) parts.push(`${deletes.size} delete${deletes.size === 1 ? "" : "s"}`);
+    if (inserts.length) parts.push(`${inserts.length} new row${inserts.length === 1 ? "" : "s"}`);
+    return parts.join(" · ");
+  };
+
+  const discardAll = () => {
+    setEdits(new Map());
+    setDeletes(new Set());
+    setInserts([]);
+  };
 
   const doPreview = async () => {
     if (!editable) return;
     setApplyErr("");
     try {
-      setPreview(await applyEdits(editable.schema, editable.table, buildEdits(), true));
+      setPreview(await applyChanges(editable.schema, editable.table, buildChanges(), true));
     } catch (e) {
       setApplyErr(String(e));
     }
@@ -226,9 +314,9 @@ export default function Grid({ columns, rows, editable, applyEdits, refresh }: P
     setApplyBusy(true);
     setApplyErr("");
     try {
-      await applyEdits(editable.schema, editable.table, buildEdits(), false);
+      await applyChanges(editable.schema, editable.table, buildChanges(), false);
       setPreview(null);
-      setEdits(new Map());
+      discardAll();
       refresh();
     } catch (e) {
       setApplyErr(String(e));
@@ -238,7 +326,7 @@ export default function Grid({ columns, rows, editable, applyEdits, refresh }: P
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (rows.length === 0 || editing) return;
+    if (total === 0 || editing) return;
     switch (e.key) {
       case "ArrowUp":
         e.preventDefault();
@@ -259,7 +347,8 @@ export default function Grid({ columns, rows, editable, applyEdits, refresh }: P
       case "Enter":
         if (sel) {
           e.preventDefault();
-          if (canEditCol(sel.c) && !(typeof rows[sel.r][sel.c] === "object" && rows[sel.r][sel.c] !== null)) {
+          const v = isInsertRow(sel.r) ? undefined : rows[sel.r][sel.c];
+          if (canEditCol(sel.c) && !(typeof v === "object" && v !== null)) {
             startEdit(sel.r, sel.c);
           } else {
             setInspecting(true);
@@ -267,7 +356,7 @@ export default function Grid({ columns, rows, editable, applyEdits, refresh }: P
         }
         break;
       case " ":
-        if (sel) {
+        if (sel && !isInsertRow(sel.r)) {
           e.preventDefault();
           setInspecting(true);
         }
@@ -277,10 +366,21 @@ export default function Grid({ columns, rows, editable, applyEdits, refresh }: P
         if (inspecting) setInspecting(false);
         else setSel(null);
         break;
+      case "Backspace":
+        if ((e.metaKey || e.ctrlKey) && sel) {
+          e.preventDefault();
+          if (isInsertRow(sel.r)) {
+            removeInsertRow(sel.r - rows.length);
+            setSel(null);
+          } else if (editable) {
+            toggleDelete(sel.r);
+          }
+        }
+        break;
       case "c":
         if ((e.metaKey || e.ctrlKey) && sel) {
           e.preventDefault();
-          copyText(cellText(displayValue(sel.r, sel.c)));
+          copyText(cellText(displayValue(sel.r, sel.c) ?? null));
         }
         break;
     }
@@ -301,7 +401,7 @@ export default function Grid({ columns, rows, editable, applyEdits, refresh }: P
     }
   };
 
-  const selValue = sel ? displayValue(sel.r, sel.c) : undefined;
+  const selValue = sel && !isInsertRow(sel.r) ? displayValue(sel.r, sel.c) : undefined;
 
   const renderCell = (r: number, c: number) => {
     if (editing && editing.r === r && editing.c === c) {
@@ -317,17 +417,22 @@ export default function Grid({ columns, rows, editable, applyEdits, refresh }: P
         />
       );
     }
+    if (isInsertRow(r)) {
+      const m = inserts[r - rows.length];
+      if (!m || !m.has(c))
+        return <span className="default-hint">{canEditCol(c) ? "default" : ""}</span>;
+      const v = m.get(c)!;
+      return v === null ? <span className="null">NULL</span> : v;
+    }
     const staged = edits.has(stagedKey(r, c));
     const v = staged ? displayValue(r, c) : rows[r][c];
-    const inner =
-      v === null ? (
-        <span className="null">NULL</span>
-      ) : typeof v === "object" ? (
-        <span className="json">{JSON.stringify(v)}</span>
-      ) : (
-        String(v)
-      );
-    return inner;
+    return v === null ? (
+      <span className="null">NULL</span>
+    ) : typeof v === "object" ? (
+      <span className="json">{JSON.stringify(v)}</span>
+    ) : (
+      String(v)
+    );
   };
 
   return (
@@ -344,31 +449,33 @@ export default function Grid({ columns, rows, editable, applyEdits, refresh }: P
           </div>
           <div style={{ height: virtualizer.getTotalSize(), width: totalW, position: "relative" }}>
             {virtualizer.getVirtualItems().map((vr) => {
-              const row = rows[vr.index];
+              const r = vr.index;
+              const insert = isInsertRow(r);
+              const deleted = !insert && deletes.has(r);
               return (
                 <div
                   key={vr.key}
-                  className="grid-row"
+                  className={`grid-row${insert ? " insert" : ""}${deleted ? " deleted" : ""}`}
                   style={{
                     gridTemplateColumns: template,
                     transform: `translateY(${vr.start}px)`,
                   }}
                 >
-                  <div className="gc gutter">{vr.index + 1}</div>
-                  {row.map((_, ci) => (
+                  <div className="gc gutter">{insert ? "+" : r + 1}</div>
+                  {columns.map((_, ci) => (
                     <div
                       key={ci}
                       className={`gc${numClass(ci)}${
-                        sel && sel.r === vr.index && sel.c === ci ? " sel" : ""
-                      }${edits.has(stagedKey(vr.index, ci)) ? " staged" : ""}`}
-                      onMouseDown={() => setSel({ r: vr.index, c: ci })}
+                        sel && sel.r === r && sel.c === ci ? " sel" : ""
+                      }${!insert && edits.has(stagedKey(r, ci)) ? " staged" : ""}`}
+                      onMouseDown={() => setSel({ r, c: ci })}
                       onDoubleClick={() => {
-                        setSel({ r: vr.index, c: ci });
-                        if (canEditCol(ci)) startEdit(vr.index, ci);
-                        else setInspecting(true);
+                        setSel({ r, c: ci });
+                        if (canEditCol(ci)) startEdit(r, ci);
+                        else if (!insert) setInspecting(true);
                       }}
                     >
-                      {renderCell(vr.index, ci)}
+                      {renderCell(r, ci)}
                     </div>
                   ))}
                 </div>
@@ -391,14 +498,21 @@ export default function Grid({ columns, rows, editable, applyEdits, refresh }: P
         )}
       </div>
 
-      {edits.size > 0 && (
+      {editable && (
+        <div className="grid-toolbar">
+          <button className="btn mini" onClick={addRow}>
+            + Row
+          </button>
+          <span className="grid-toolbar-hint">⌘⌫ marks row for delete · empty new cell = DEFAULT</span>
+        </div>
+      )}
+
+      {changeCount > 0 && (
         <div className="edits-bar">
-          <span className="edits-count">
-            {edits.size} staged edit{edits.size === 1 ? "" : "s"}
-          </span>
+          <span className="edits-count">{changeSummary()}</span>
           {applyErr && !preview && <span className="edits-err">{applyErr}</span>}
           <span className="spacer" />
-          <button className="btn" onClick={() => setEdits(new Map())}>
+          <button className="btn" onClick={discardAll}>
             Discard
           </button>
           <button className="btn primary" onClick={doPreview}>
@@ -411,7 +525,7 @@ export default function Grid({ columns, rows, editable, applyEdits, refresh }: P
         <div className="modal-overlay" onMouseDown={(e) => e.target === e.currentTarget && setPreview(null)}>
           <div className="preview-panel">
             <div className="preview-head">
-              This will run in a transaction — each statement must match exactly one row:
+              This will run in a transaction — each statement must affect exactly one row:
             </div>
             <pre className="preview-sql">{preview.join(";\n\n") + ";"}</pre>
             {applyErr && <div className="modal-err">{applyErr}</div>}
@@ -421,7 +535,9 @@ export default function Grid({ columns, rows, editable, applyEdits, refresh }: P
                 Cancel
               </button>
               <button className="btn primary" disabled={applyBusy} onClick={doApply}>
-                {applyBusy ? "Applying…" : `Apply ${preview.length} update${preview.length === 1 ? "" : "s"}`}
+                {applyBusy
+                  ? "Applying…"
+                  : `Apply ${preview.length} change${preview.length === 1 ? "" : "s"}`}
               </button>
             </div>
           </div>

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import Editor from "./Editor";
-import Grid, { type CellEdit, type ColumnMeta, type EditableInfo } from "./Grid";
+import Grid, { type ChangeSet, type ColumnMeta, type EditableInfo } from "./Grid";
 import ConnectionModal, { type Profile } from "./ConnectionModal";
 import "./App.css";
 
@@ -424,12 +424,12 @@ function App() {
                   columns={columns}
                   rows={rows}
                   editable={editableInfo}
-                  applyEdits={(schema, table, edits: CellEdit[], dryRun) =>
-                    invoke<string[]>("apply_edits", {
+                  applyChanges={(schema, table, changes: ChangeSet, dryRun) =>
+                    invoke<string[]>("apply_changes", {
                       connId: conn?.connId ?? 0,
                       schema,
                       table,
-                      edits,
+                      changes,
                       dryRun,
                     })
                   }

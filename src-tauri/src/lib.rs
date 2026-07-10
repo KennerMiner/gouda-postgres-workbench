@@ -23,7 +23,7 @@ pub fn run() {
             db::disconnect,
             db::list_objects,
             db::run_query,
-            edits::apply_edits,
+            edits::apply_changes,
             history::history_list,
             history::history_clear,
             profiles::profiles_list,

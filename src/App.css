@@ -489,6 +489,38 @@ body.row-resizing {
   outline: none;
 }
 
+.grid-row.insert .gc {
+  background: rgba(76, 175, 80, 0.08);
+}
+
+.grid-row.deleted .gc {
+  background: rgba(229, 84, 78, 0.12);
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+
+.default-hint {
+  color: var(--null);
+  font-style: italic;
+  font-size: 10.5px;
+}
+
+.grid-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--border-faint);
+  background: var(--bg-panel);
+}
+
+.grid-toolbar-hint {
+  font-size: 10px;
+  color: var(--text-dim);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .edits-bar {
   display: flex;
   align-items: center;

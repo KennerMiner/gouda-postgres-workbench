@@ -58,7 +58,9 @@ Personal daily driver, macOS-first.
       read-only), staged edits w/ amber tint, inline input or inspector
       textarea (JSON validated), backend dry-run preview, transactional
       apply where each UPDATE must hit exactly 1 row or all roll back
-      (INSERT/DELETE rows still TODO)
+- [x] Row insert/delete: + Row pending rows (empty cell = DEFAULT, ⌘⌫ = NULL),
+      ⌘⌫ toggles row deletion; one transactional ChangeSet ordered
+      updates → deletes → inserts
 - [ ] Visual EXPLAIN (ANALYZE, BUFFERS) plan tree
 - [ ] Command palette (cmdk), saved snippets
 - [ ] Transaction mode (manual commit) + read-only connection toggle

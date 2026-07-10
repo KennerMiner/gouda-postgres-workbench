@@ -29,6 +29,35 @@ pub struct CellEdit {
     pk: Vec<PkVal>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RowDelete {
+    pk: Vec<PkVal>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InsertCell {
+    column: String,
+    cast_type: String,
+    /// None = explicit NULL (a column absent from `cells` takes its DEFAULT).
+    value: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RowInsert {
+    cells: Vec<InsertCell>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ChangeSet {
+    edits: Vec<CellEdit>,
+    deletes: Vec<RowDelete>,
+    inserts: Vec<RowInsert>,
+}
+
 fn qi(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
@@ -51,6 +80,55 @@ fn check_cast(t: &str) -> Result<(), String> {
     }
 }
 
+fn where_pk(pk: &[PkVal]) -> Result<String, String> {
+    if pk.is_empty() {
+        return Err("change without primary key".into());
+    }
+    let mut wheres = Vec::with_capacity(pk.len());
+    for p in pk {
+        check_cast(&p.cast_type)?;
+        wheres.push(format!(
+            "{} = {}::{}",
+            qi(&p.column),
+            quote_literal(&p.value),
+            p.cast_type
+        ));
+    }
+    Ok(wheres.join(" and "))
+}
+
+fn build_delete(schema: &str, table: &str, del: &RowDelete) -> Result<String, String> {
+    Ok(format!(
+        "delete from {}.{} where {}",
+        qi(schema),
+        qi(table),
+        where_pk(&del.pk)?
+    ))
+}
+
+fn build_insert(schema: &str, table: &str, ins: &RowInsert) -> Result<String, String> {
+    if ins.cells.is_empty() {
+        return Ok(format!("insert into {}.{} default values", qi(schema), qi(table)));
+    }
+    let mut cols = Vec::with_capacity(ins.cells.len());
+    let mut vals = Vec::with_capacity(ins.cells.len());
+    for cell in &ins.cells {
+        check_cast(&cell.cast_type)?;
+        cols.push(qi(&cell.column));
+        vals.push(match &cell.value {
+            Some(v) => format!("{}::{}", quote_literal(v), cell.cast_type),
+            None => "null".to_string(),
+        });
+    }
+    Ok(format!(
+        "insert into {}.{} ({}) values ({})",
+        qi(schema),
+        qi(table),
+        cols.join(", "),
+        vals.join(", ")
+    ))
+}
+
 fn build_statement(schema: &str, table: &str, edit: &CellEdit) -> Result<String, String> {
     check_cast(&edit.cast_type)?;
     let set = match &edit.value {
@@ -62,45 +140,45 @@ fn build_statement(schema: &str, table: &str, edit: &CellEdit) -> Result<String,
         ),
         None => format!("{} = null", qi(&edit.column)),
     };
-    let mut wheres = Vec::with_capacity(edit.pk.len());
-    for pk in &edit.pk {
-        check_cast(&pk.cast_type)?;
-        wheres.push(format!(
-            "{} = {}::{}",
-            qi(&pk.column),
-            quote_literal(&pk.value),
-            pk.cast_type
-        ));
-    }
-    if wheres.is_empty() {
-        return Err("edit without primary key".into());
-    }
     Ok(format!(
         "update {}.{} set {} where {}",
         qi(schema),
         qi(table),
         set,
-        wheres.join(" and ")
+        where_pk(&edit.pk)?
     ))
 }
 
+/// Order matters: updates, then deletes, then inserts — so a delete+reinsert
+/// of a row with a unique key works within one batch.
+fn build_all(schema: &str, table: &str, changes: &ChangeSet) -> Result<Vec<String>, String> {
+    let mut statements = Vec::new();
+    for e in &changes.edits {
+        statements.push(build_statement(schema, table, e)?);
+    }
+    for d in &changes.deletes {
+        statements.push(build_delete(schema, table, d)?);
+    }
+    for i in &changes.inserts {
+        statements.push(build_insert(schema, table, i)?);
+    }
+    Ok(statements)
+}
+
 #[tauri::command]
-pub async fn apply_edits(
+pub async fn apply_changes(
     state: State<'_, Connections>,
     store: State<'_, Store>,
     conn_id: u32,
     schema: String,
     table: String,
-    edits: Vec<CellEdit>,
+    changes: ChangeSet,
     dry_run: bool,
 ) -> Result<Vec<String>, String> {
-    if edits.is_empty() {
+    let statements = build_all(&schema, &table, &changes)?;
+    if statements.is_empty() {
         return Ok(vec![]);
     }
-    let statements = edits
-        .iter()
-        .map(|e| build_statement(&schema, &table, e))
-        .collect::<Result<Vec<_>, _>>()?;
 
     if dry_run {
         return Ok(statements);
@@ -143,7 +221,7 @@ pub async fn apply_edits(
     crate::history::record(
         &store,
         entry.label(),
-        &format!("-- applied {} edit(s)\n{}", statements.len(), statements.join(";\n")),
+        &format!("-- applied {} change(s)\n{}", statements.len(), statements.join(";\n")),
         started_at,
         Some(start.elapsed().as_millis() as i64),
         Some(statements.len() as i64),
@@ -209,5 +287,66 @@ mod tests {
         let mut e = edit("c", "text", Some("v"));
         e.pk.clear();
         assert!(build_statement("s", "t", &e).is_err());
+    }
+
+    #[test]
+    fn generates_delete() {
+        let d = RowDelete {
+            pk: vec![PkVal {
+                column: "id".into(),
+                cast_type: "int8".into(),
+                value: "9".into(),
+            }],
+        };
+        assert_eq!(
+            build_delete("public", "items", &d).unwrap(),
+            r#"delete from "public"."items" where "id" = '9'::int8"#
+        );
+        assert!(build_delete("public", "items", &RowDelete { pk: vec![] }).is_err());
+    }
+
+    #[test]
+    fn generates_insert() {
+        let ins = RowInsert {
+            cells: vec![
+                InsertCell {
+                    column: "name".into(),
+                    cast_type: "text".into(),
+                    value: Some("O'Neil".into()),
+                },
+                InsertCell {
+                    column: "payload".into(),
+                    cast_type: "jsonb".into(),
+                    value: None,
+                },
+            ],
+        };
+        assert_eq!(
+            build_insert("public", "items", &ins).unwrap(),
+            r#"insert into "public"."items" ("name", "payload") values ('O''Neil'::text, null)"#
+        );
+        assert_eq!(
+            build_insert("public", "items", &RowInsert { cells: vec![] }).unwrap(),
+            r#"insert into "public"."items" default values"#
+        );
+    }
+
+    #[test]
+    fn change_ordering_updates_deletes_inserts() {
+        let changes = ChangeSet {
+            edits: vec![edit("c", "text", Some("v"))],
+            deletes: vec![RowDelete {
+                pk: vec![PkVal {
+                    column: "id".into(),
+                    cast_type: "int4".into(),
+                    value: "1".into(),
+                }],
+            }],
+            inserts: vec![RowInsert { cells: vec![] }],
+        };
+        let stmts = build_all("s", "t", &changes).unwrap();
+        assert!(stmts[0].starts_with("update"));
+        assert!(stmts[1].starts_with("delete"));
+        assert!(stmts[2].starts_with("insert"));
     }
 }
