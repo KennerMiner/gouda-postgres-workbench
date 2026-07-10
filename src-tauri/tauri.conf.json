@@ -13,8 +13,12 @@
     "windows": [
       {
         "title": "psqlViewer",
-        "width": 800,
-        "height": 600
+        "width": 1150,
+        "height": 760,
+        "minWidth": 720,
+        "minHeight": 480,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ],
     "security": {

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
@@ -14,6 +14,32 @@ const DEFAULT_DSN = "postgres://heroage:heroage@localhost:5432/heroage";
 const DEFAULT_SQL =
   "select table_name, table_type from information_schema.tables where table_schema = 'public' order by 1;";
 
+const NUMERIC_TYPES = new Set([
+  "int2",
+  "int4",
+  "int8",
+  "float4",
+  "float8",
+  "numeric",
+  "oid",
+  "money",
+]);
+
+/** Parse enough of a DSN to render the TablePlus-style identity banner. */
+function connIdentity(dsn: string): string {
+  try {
+    const u = new URL(dsn.replace(/^postgres(ql)?:/, "http:"));
+    const parts = ["PostgreSQL"];
+    if (u.username) parts.push(u.username);
+    parts.push(u.hostname || "localhost");
+    const db = u.pathname.replace(/^\//, "");
+    if (db) parts.push(db);
+    return parts.join(" : ");
+  } catch {
+    return "PostgreSQL";
+  }
+}
+
 function App() {
   const [dsn, setDsn] = useState(DEFAULT_DSN);
   const [sql, setSql] = useState(DEFAULT_SQL);
@@ -24,14 +50,15 @@ function App() {
   const [running, setRunning] = useState(false);
   const rowBuffer = useRef<unknown[][]>([]);
 
+  const identity = useMemo(() => connIdentity(dsn), [dsn]);
+
   const run = useCallback(async () => {
     setRunning(true);
     setError("");
-    setStatus("running…");
+    setStatus("");
     setColumns([]);
     setRows([]);
     rowBuffer.current = [];
-    const started = performance.now();
 
     const channel = new Channel<QueryEvent>();
     channel.onmessage = (ev) => {
@@ -47,15 +74,12 @@ function App() {
           break;
         case "done":
           setStatus(
-            `${ev.rowCount} row${ev.rowCount === 1 ? "" : "s"} · ${ev.elapsedMs} ms (server) · ${Math.round(
-              performance.now() - started,
-            )} ms (round trip)`,
+            `${ev.rowCount.toLocaleString()} row${ev.rowCount === 1 ? "" : "s"} in ${ev.elapsedMs} ms`,
           );
           setRunning(false);
           break;
         case "error":
           setError(ev.message);
-          setStatus("");
           setRunning(false);
           break;
       }
@@ -65,7 +89,6 @@ function App() {
       await invoke("run_query", { dsn, sql, onEvent: channel });
     } catch (e) {
       setError(String(e));
-      setStatus("");
       setRunning(false);
     }
   }, [dsn, sql]);
@@ -77,9 +100,12 @@ function App() {
     }
   };
 
+  const align = (c: ColumnMeta) => (NUMERIC_TYPES.has(c.typeName) ? "num" : "");
+
   return (
     <div className="app">
-      <div className="toolbar">
+      {/* Overlay titlebar: this strip sits beside the traffic lights and drags the window. */}
+      <div className="titlebar" data-tauri-drag-region>
         <input
           className="dsn"
           value={dsn}
@@ -87,10 +113,12 @@ function App() {
           spellCheck={false}
           placeholder="postgres://user:pass@host:5432/dbname"
         />
-        <button className="run" onClick={run} disabled={running}>
-          {running ? "Running…" : "Run ⌘↵"}
+        <button className="run" onClick={run} disabled={running} title="Run (⌘↵)">
+          {running ? "Running…" : "▶ Run"}
         </button>
       </div>
+
+      <div className="conn-banner">{identity}</div>
 
       <textarea
         className="editor"
@@ -100,36 +128,43 @@ function App() {
         spellCheck={false}
       />
 
-      <div className="statusbar">
-        {error ? <span className="err">{error}</span> : <span className="ok">{status}</span>}
-      </div>
-
       <div className="results">
-        {columns.length > 0 && (
-          <table>
-            <thead>
-              <tr>
-                <th className="rownum">#</th>
-                {columns.map((c, i) => (
-                  <th key={i}>
-                    <span className="colname">{c.name}</span>
-                    <span className="coltype">{c.typeName}</span>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, ri) => (
-                <tr key={ri}>
-                  <td className="rownum">{ri + 1}</td>
-                  {r.map((cell, ci) => (
-                    <td key={ci}>{renderCell(cell)}</td>
+        {error ? (
+          <div className="error-pane">{error}</div>
+        ) : (
+          columns.length > 0 && (
+            <table>
+              <thead>
+                <tr>
+                  <th className="rownum" />
+                  {columns.map((c, i) => (
+                    <th key={i} className={align(c)} title={c.typeName}>
+                      {c.name}
+                    </th>
                   ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rows.map((r, ri) => (
+                  <tr key={ri}>
+                    <td className="rownum">{ri + 1}</td>
+                    {r.map((cell, ci) => (
+                      <td key={ci} className={align(columns[ci])}>
+                        {renderCell(cell)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )
         )}
+      </div>
+
+      <div className="statusbar">
+        <span className="hint">Run: ⌘↵</span>
+        <span className="rowcount">{running ? "running…" : status}</span>
+        <span className="engine">PostgreSQL</span>
       </div>
     </div>
   );
