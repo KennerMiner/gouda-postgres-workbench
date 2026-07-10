@@ -1,4 +1,5 @@
 mod db;
+mod edits;
 mod history;
 mod profiles;
 mod store;
@@ -22,6 +23,7 @@ pub fn run() {
             db::disconnect,
             db::list_objects,
             db::run_query,
+            edits::apply_edits,
             history::history_list,
             history::history_clear,
             profiles::profiles_list,

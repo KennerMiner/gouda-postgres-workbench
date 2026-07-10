@@ -43,7 +43,9 @@ Personal daily driver, macOS-first.
 - [x] Virtualized grid (TanStack Virtual): fixed 24px rows, content-measured
       column widths, sticky header + row gutter
 - [ ] Editor tabs + run-all (multi-statement via simple_query)
-- [ ] Grid: cell selection, JSONB/array expansion popover, copy cell/row
+- [x] Grid: cell selection (click/arrows/⌘C/Esc), JSONB/array inspector panel
+      with collapsible typed tree + copy pretty/compact; >200KB falls back to
+      text view
 - [ ] Schema tree: add functions/types; column list under each table
 - [x] Persistent searchable query history (SQLite in app-data dir, last 5000,
       Items/History sidebar tabs, click loads into editor)
@@ -51,8 +53,12 @@ Personal daily driver, macOS-first.
 
 ### M2 — Better than Beekeeper
 - [ ] Schema-aware autocomplete (live catalog → CodeMirror completions)
-- [ ] Inline data editing → generated UPDATE/INSERT, diff preview before commit
-      (PK detection per table; no PK → read-only)
+- [x] Inline data editing → generated UPDATEs with preview-before-commit:
+      protocol-level PK detection (single table + full PK in result, else
+      read-only), staged edits w/ amber tint, inline input or inspector
+      textarea (JSON validated), backend dry-run preview, transactional
+      apply where each UPDATE must hit exactly 1 row or all roll back
+      (INSERT/DELETE rows still TODO)
 - [ ] Visual EXPLAIN (ANALYZE, BUFFERS) plan tree
 - [ ] Command palette (cmdk), saved snippets
 - [ ] Transaction mode (manual commit) + read-only connection toggle

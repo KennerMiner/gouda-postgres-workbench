@@ -37,7 +37,22 @@ pub struct Connections {
     map: Mutex<HashMap<u32, Arc<ConnEntry>>>,
 }
 
+impl ConnEntry {
+    pub(crate) fn client(&self) -> &Client {
+        &self.client
+    }
+
+    pub(crate) fn label(&self) -> &str {
+        &self.label
+    }
+}
+
 impl Connections {
+    /// Public lookup for other modules (edits, …).
+    pub(crate) async fn entry(&self, id: u32) -> Result<Arc<ConnEntry>, String> {
+        self.get(id).await
+    }
+
     async fn get(&self, id: u32) -> Result<Arc<ConnEntry>, String> {
         self.map
             .lock()
@@ -83,6 +98,85 @@ pub struct ColumnMeta {
     type_oid: u32,
 }
 
+/// Present when the result set is safely editable: every column comes from one
+/// table and that table's full primary key appears in the result.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EditableInfo {
+    schema: String,
+    table: String,
+    /// Indices (into the result columns) of the primary-key columns.
+    pk_indices: Vec<usize>,
+    /// Per result column: does it belong to the table (i.e. can be SET)?
+    /// Array types are excluded for now (text-cast round-trip is unreliable).
+    editable_cols: Vec<bool>,
+}
+
+async fn detect_editable(
+    client: &Client,
+    stmt: &tokio_postgres::Statement,
+) -> Option<EditableInfo> {
+    let cols = stmt.columns();
+    if cols.is_empty() {
+        return None;
+    }
+
+    // All real columns must come from the same table.
+    let mut table_oid: Option<u32> = None;
+    for c in cols {
+        if let Some(oid) = c.table_oid() {
+            if *table_oid.get_or_insert(oid) != oid {
+                return None; // join across tables
+            }
+        }
+    }
+    let table_oid = table_oid?;
+
+    let row = client
+        .query_one(
+            r#"select n.nspname,
+                      c.relname,
+                      (select array_agg(k.attnum)
+                       from pg_index i, unnest(i.indkey) k(attnum)
+                       where i.indrelid = c.oid and i.indisprimary)
+               from pg_class c
+               join pg_namespace n on n.oid = c.relnamespace
+               where c.oid = $1"#,
+            &[&table_oid],
+        )
+        .await
+        .ok()?;
+    let schema: String = row.get(0);
+    let table: String = row.get(1);
+    let pk_attnums: Option<Vec<i16>> = row.get(2);
+    let pk_attnums = pk_attnums?; // no primary key -> read-only
+
+    // Every PK column must be present in the result set.
+    let mut pk_indices = Vec::with_capacity(pk_attnums.len());
+    for attnum in &pk_attnums {
+        let idx = cols.iter().position(|c| {
+            c.table_oid() == Some(table_oid) && c.column_id() == Some(*attnum)
+        })?;
+        pk_indices.push(idx);
+    }
+
+    let editable_cols = cols
+        .iter()
+        .map(|c| {
+            c.table_oid() == Some(table_oid)
+                && c.column_id().is_some_and(|id| id > 0)
+                && !c.type_().name().starts_with('_')
+        })
+        .collect();
+
+    Some(EditableInfo {
+        schema,
+        table,
+        pk_indices,
+        editable_cols,
+    })
+}
+
 /// Streaming protocol sent over the Channel. One `Meta`, then zero or more
 /// `Rows`, terminated by exactly one `Done` or one `Error`.
 ///
@@ -91,7 +185,10 @@ pub struct ColumnMeta {
 #[derive(Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum QueryEvent {
-    Meta { columns: Vec<ColumnMeta> },
+    Meta {
+        columns: Vec<ColumnMeta>,
+        editable: Option<EditableInfo>,
+    },
     Rows { rows: Vec<Vec<J>> },
     Done { row_count: usize, elapsed_ms: u64 },
     Error { message: String },
@@ -211,8 +308,8 @@ pub async fn list_objects(
                from pg_class c
                join pg_namespace n on n.oid = c.relnamespace
                where c.relkind in ('r', 'p', 'v', 'm', 'f')
-                 and n.nspname not in ('pg_catalog', 'information_schema')
-                 and n.nspname not like 'pg_toast%'
+                 and n.nspname <> 'information_schema'
+                 and n.nspname !~ '^pg_'  -- catalog, toast, temp schemas
                order by 1, 3, 2"#,
             &[],
         )
@@ -270,8 +367,9 @@ pub async fn run_query(
             })
             .collect();
         let ncols = columns.len();
+        let editable = detect_editable(client, &stmt).await;
         on_event
-            .send(QueryEvent::Meta { columns })
+            .send(QueryEvent::Meta { columns, editable })
             .map_err(|e| e.to_string())?;
 
         let params = std::iter::empty::<&(dyn ToSql + Sync)>();
@@ -484,6 +582,49 @@ mod tests {
         assert!(matches!(fb, J::String(_)), "inet fallback: {fb:?}");
     }
 
+    /// Editability detection: single table + full PK present = editable;
+    /// computed columns excluded; missing PK or joins = read-only.
+    #[tokio::test]
+    async fn editable_detection() {
+        let client = test_client().await;
+        client
+            .batch_execute(
+                "create temp table edit_t(id int primary key, v text, n numeric);
+                 create temp table nopk_t(v text);",
+            )
+            .await
+            .unwrap();
+
+        let stmt = client.prepare("select id, v, n from edit_t").await.unwrap();
+        let info = detect_editable(&client, &stmt).await.expect("editable");
+        assert_eq!(info.table, "edit_t");
+        assert_eq!(info.pk_indices, vec![0]);
+        assert_eq!(info.editable_cols, vec![true, true, true]);
+
+        // Computed column: not SET-able, rest still editable.
+        let stmt = client
+            .prepare("select id, v || 'x' as vx from edit_t")
+            .await
+            .unwrap();
+        let info = detect_editable(&client, &stmt).await.expect("editable");
+        assert_eq!(info.editable_cols, vec![true, false]);
+
+        // PK missing from result -> read-only.
+        let stmt = client.prepare("select v from edit_t").await.unwrap();
+        assert!(detect_editable(&client, &stmt).await.is_none());
+
+        // Join across tables -> read-only.
+        let stmt = client
+            .prepare("select a.id, b.v from edit_t a join nopk_t b on true")
+            .await
+            .unwrap();
+        assert!(detect_editable(&client, &stmt).await.is_none());
+
+        // Table without a PK -> read-only.
+        let stmt = client.prepare("select v from nopk_t").await.unwrap();
+        assert!(detect_editable(&client, &stmt).await.is_none());
+    }
+
     /// The sidebar query must return public-schema tables from the dev DB and
     /// exclude system schemas.
     #[tokio::test]
@@ -494,8 +635,8 @@ mod tests {
                 r#"select n.nspname, c.relname
                    from pg_class c join pg_namespace n on n.oid = c.relnamespace
                    where c.relkind in ('r', 'p', 'v', 'm', 'f')
-                     and n.nspname not in ('pg_catalog', 'information_schema')
-                     and n.nspname not like 'pg_toast%'"#,
+                     and n.nspname <> 'information_schema'
+                     and n.nspname !~ '^pg_'"#,
                 &[],
             )
             .await

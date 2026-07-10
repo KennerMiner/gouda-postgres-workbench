@@ -399,6 +399,13 @@ body.row-resizing {
 
 /* Virtualized grid: system font like TablePlus — mono is for the editor. */
 
+.grid-outer {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 .grid-wrap {
   display: flex;
   flex: 1;
@@ -462,6 +469,105 @@ body.row-resizing {
 .gc.sel {
   box-shadow: inset 0 0 0 2px var(--green);
   border-radius: 2px;
+}
+
+.gc.staged {
+  background: rgba(217, 160, 95, 0.16);
+  color: #e8c896;
+}
+
+.cell-input {
+  width: 100%;
+  height: 20px;
+  margin-top: 1px;
+  padding: 0 4px;
+  border: 1px solid var(--green);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11.5px;
+  outline: none;
+}
+
+.edits-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(217, 160, 95, 0.1);
+  border-top: 1px solid var(--border);
+}
+
+.edits-bar .spacer {
+  flex: 1;
+}
+
+.edits-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: #e8c896;
+}
+
+.edits-err {
+  font: 11px var(--mono);
+  color: var(--err);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-panel {
+  display: flex;
+  flex-direction: column;
+  width: 560px;
+  max-width: calc(100vw - 60px);
+  max-height: calc(100vh - 80px);
+  padding: 14px 16px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  gap: 10px;
+}
+
+.preview-head {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.preview-sql {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: 11.5px/1.6 var(--mono);
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.inspector-body.edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inspector-edit {
+  flex: 1;
+  min-height: 160px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: 11.5px/1.5 var(--mono);
+  resize: none;
+  outline: none;
+}
+
+.inspector-edit:focus {
+  border-color: var(--green);
 }
 
 .gc.gutter {

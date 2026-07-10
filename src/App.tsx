@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import Editor from "./Editor";
-import Grid, { type ColumnMeta } from "./Grid";
+import Grid, { type CellEdit, type ColumnMeta, type EditableInfo } from "./Grid";
 import ConnectionModal, { type Profile } from "./ConnectionModal";
 import "./App.css";
 
 type QueryEvent =
-  | { kind: "meta"; columns: ColumnMeta[] }
+  | { kind: "meta"; columns: ColumnMeta[]; editable: EditableInfo | null }
   | { kind: "rows"; rows: unknown[][] }
   | { kind: "done"; rowCount: number; elapsedMs: number }
   | { kind: "error"; message: string };
@@ -63,6 +63,8 @@ function App() {
   const [sql, setSql] = useState(DEFAULT_SQL);
   const [editorH, setEditorH] = useState(160);
   const [columns, setColumns] = useState<ColumnMeta[]>([]);
+  const [editableInfo, setEditableInfo] = useState<EditableInfo | null>(null);
+  const lastSqlRef = useRef("");
   const [rows, setRows] = useState<unknown[][]>([]);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -155,13 +157,16 @@ function App() {
       setStatus("");
       setColumns([]);
       setRows([]);
+      setEditableInfo(null);
       rowBuffer.current = [];
+      lastSqlRef.current = text;
 
       const channel = new Channel<QueryEvent>();
       channel.onmessage = (ev) => {
         switch (ev.kind) {
           case "meta":
             setColumns(ev.columns);
+            setEditableInfo(ev.editable ?? null);
             break;
           case "rows":
             // Accumulate in a ref and hand React the same concatenated array
@@ -414,12 +419,33 @@ function App() {
             {error ? (
               <div className="error-pane">{error}</div>
             ) : (
-              columns.length > 0 && <Grid columns={columns} rows={rows} />
+              columns.length > 0 && (
+                <Grid
+                  columns={columns}
+                  rows={rows}
+                  editable={editableInfo}
+                  applyEdits={(schema, table, edits: CellEdit[], dryRun) =>
+                    invoke<string[]>("apply_edits", {
+                      connId: conn?.connId ?? 0,
+                      schema,
+                      table,
+                      edits,
+                      dryRun,
+                    })
+                  }
+                  refresh={() => {
+                    if (lastSqlRef.current) runSql(lastSqlRef.current);
+                  }}
+                />
+              )
             )}
           </div>
 
           <div className="statusbar">
-            <span className="hint">Run statement: ⌘↵</span>
+            <span className="hint">
+              Run statement: ⌘↵
+              {columns.length > 0 && (editableInfo ? " · editable" : " · read-only")}
+            </span>
             <span className="rowcount">{running ? "running…" : status}</span>
             <span className="engine">
               {conn ? `PostgreSQL ${conn.serverVersion}` : "disconnected"}
