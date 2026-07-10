@@ -22,14 +22,21 @@ use tokio_postgres::{types::ToSql, Client, NoTls, Row};
 /// streams in rather than materializing entirely before the first paint.
 const BATCH: usize = 500;
 
+/// An open client plus a human-readable identity (`user@host/db`) used to
+/// label history entries.
+pub struct ConnEntry {
+    client: Client,
+    label: String,
+}
+
 #[derive(Default)]
 pub struct Connections {
     next_id: AtomicU32,
-    map: Mutex<HashMap<u32, Arc<Client>>>,
+    map: Mutex<HashMap<u32, Arc<ConnEntry>>>,
 }
 
 impl Connections {
-    async fn get(&self, id: u32) -> Result<Arc<Client>, String> {
+    async fn get(&self, id: u32) -> Result<Arc<ConnEntry>, String> {
         self.map
             .lock()
             .await
@@ -44,6 +51,17 @@ impl Connections {
             self.map.lock().await.remove(&id);
         }
     }
+}
+
+fn host_of(dsn: &str) -> String {
+    dsn.parse::<tokio_postgres::Config>()
+        .ok()
+        .and_then(|c| c.get_hosts().first().cloned())
+        .map(|h| match h {
+            tokio_postgres::config::Host::Tcp(s) => s,
+            tokio_postgres::config::Host::Unix(p) => p.display().to_string(),
+        })
+        .unwrap_or_else(|| "?".into())
 }
 
 #[derive(Serialize)]
@@ -104,14 +122,23 @@ pub async fn connect(state: State<'_, Connections>, dsn: String) -> Result<ConnI
         .await
         .map_err(|e| format!("handshake: {e}"))?;
 
+    let server_version: String = row.get(0);
+    let user: String = row.get(1);
+    let database: String = row.get(2);
+
     let conn_id = state.next_id.fetch_add(1, Ordering::Relaxed) + 1;
-    state.map.lock().await.insert(conn_id, Arc::new(client));
+    let label = format!("{user}@{}/{database}", host_of(&dsn));
+    state
+        .map
+        .lock()
+        .await
+        .insert(conn_id, Arc::new(ConnEntry { client, label }));
 
     Ok(ConnInfo {
         conn_id,
-        server_version: row.get(0),
-        user: row.get(1),
-        database: row.get(2),
+        server_version,
+        user,
+        database,
     })
 }
 
@@ -120,8 +147,9 @@ pub async fn connect(state: State<'_, Connections>, dsn: String) -> Result<ConnI
 /// blocked streaming.
 #[tauri::command]
 pub async fn cancel_query(state: State<'_, Connections>, conn_id: u32) -> Result<(), String> {
-    let client = state.get(conn_id).await?;
-    client
+    let entry = state.get(conn_id).await?;
+    entry
+        .client
         .cancel_token()
         .cancel_query(NoTls)
         .await
@@ -142,8 +170,9 @@ pub async fn list_objects(
     state: State<'_, Connections>,
     conn_id: u32,
 ) -> Result<Vec<DbObject>, String> {
-    let client = state.get(conn_id).await?;
-    let rows = client
+    let entry = state.get(conn_id).await?;
+    let rows = entry
+        .client
         .query(
             r#"select n.nspname,
                       c.relname,
@@ -174,7 +203,7 @@ pub async fn list_objects(
             })
             .collect()),
         Err(e) => {
-            state.drop_if_closed(conn_id, &client).await;
+            state.drop_if_closed(conn_id, &entry.client).await;
             Err(e)
         }
     }
@@ -187,20 +216,23 @@ pub async fn list_objects(
 #[tauri::command]
 pub async fn run_query(
     state: State<'_, Connections>,
+    history: State<'_, crate::history::History>,
     conn_id: u32,
     sql: String,
     on_event: Channel<QueryEvent>,
 ) -> Result<(), String> {
     let start = std::time::Instant::now();
-    let client = match state.get(conn_id).await {
+    let started_at = chrono::Utc::now().timestamp_millis();
+    let entry = match state.get(conn_id).await {
         Ok(c) => c,
         Err(message) => {
             let _ = on_event.send(QueryEvent::Error { message });
             return Ok(());
         }
     };
+    let client = &entry.client;
 
-    let result: Result<(), String> = async {
+    let result: Result<usize, String> = async {
         let stmt = client.prepare(&sql).await.map_err(|e| format!("{e}"))?;
 
         let columns: Vec<ColumnMeta> = stmt
@@ -251,13 +283,36 @@ pub async fn run_query(
                 elapsed_ms: start.elapsed().as_millis() as u64,
             })
             .map_err(|e| e.to_string())?;
-        Ok(())
+        Ok(total)
     }
     .await;
 
-    if let Err(message) = result {
-        let _ = on_event.send(QueryEvent::Error { message });
-        state.drop_if_closed(conn_id, &client).await;
+    let elapsed = start.elapsed().as_millis() as i64;
+    match result {
+        Ok(total) => {
+            crate::history::record(
+                &history,
+                &entry.label,
+                &sql,
+                started_at,
+                Some(elapsed),
+                Some(total as i64),
+                None,
+            );
+        }
+        Err(message) => {
+            crate::history::record(
+                &history,
+                &entry.label,
+                &sql,
+                started_at,
+                Some(elapsed),
+                None,
+                Some(&message),
+            );
+            let _ = on_event.send(QueryEvent::Error { message });
+            state.drop_if_closed(conn_id, client).await;
+        }
     }
     Ok(())
 }

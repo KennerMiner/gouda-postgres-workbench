@@ -41,7 +41,8 @@ Personal daily driver, macOS-first.
 - [ ] Editor tabs + run-all (multi-statement via simple_query)
 - [ ] Grid: cell selection, JSONB/array expansion popover, copy cell/row
 - [ ] Schema tree: add functions/types; column list under each table
-- [ ] Persistent searchable query history (SQLite)
+- [x] Persistent searchable query history (SQLite in app-data dir, last 5000,
+      Items/History sidebar tabs, click loads into editor)
 - [ ] Export: CSV / JSON / SQL inserts (COPY TO for big sets)
 
 ### M2 — Better than Beekeeper

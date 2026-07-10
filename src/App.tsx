@@ -12,6 +12,15 @@ type QueryEvent =
 
 type ConnInfo = { connId: number; serverVersion: string; user: string; database: string };
 type DbObject = { schema: string; name: string; kind: string };
+type HistoryEntry = {
+  id: number;
+  connLabel: string;
+  sql: string;
+  startedAt: number;
+  elapsedMs: number | null;
+  rowCount: number | null;
+  error: string | null;
+};
 
 const DEFAULT_DSN = "postgres://heroage:heroage@localhost:5432/heroage";
 const DEFAULT_SQL =
@@ -37,6 +46,14 @@ function qi(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
+function timeAgo(ms: number): string {
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
 function App() {
   const [dsn, setDsn] = useState(DEFAULT_DSN);
   const [conn, setConn] = useState<ConnInfo | null>(null);
@@ -45,6 +62,9 @@ function App() {
   const [filter, setFilter] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string>("");
+  const [sideTab, setSideTab] = useState<"items" | "history">("items");
+  const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
+  const [historyFilter, setHistoryFilter] = useState("");
 
   const [sql, setSql] = useState(DEFAULT_SQL);
   const [editorH, setEditorH] = useState(160);
@@ -74,6 +94,25 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const loadHistory = useCallback(async () => {
+    try {
+      setHistoryEntries(
+        await invoke<HistoryEntry[]>("history_list", {
+          search: historyFilter.trim() || null,
+          limit: 200,
+        }),
+      );
+    } catch {
+      // History is non-critical; ignore load failures.
+    }
+  }, [historyFilter]);
+  const loadHistoryRef = useRef(loadHistory);
+  loadHistoryRef.current = loadHistory;
+
+  useEffect(() => {
+    if (sideTab === "history") loadHistory();
+  }, [sideTab, loadHistory]);
+
   const runSql = useCallback(
     async (text: string) => {
       if (!conn) return;
@@ -101,10 +140,12 @@ function App() {
               `${ev.rowCount.toLocaleString()} row${ev.rowCount === 1 ? "" : "s"} in ${ev.elapsedMs} ms`,
             );
             setRunning(false);
+            loadHistoryRef.current();
             break;
           case "error":
             setError(ev.message);
             setRunning(false);
+            loadHistoryRef.current();
             break;
         }
       };
@@ -221,40 +262,93 @@ function App() {
 
       <div className="body">
         <div className="sidebar">
-          <input
-            className="filter"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="Search for item…"
-            spellCheck={false}
-          />
-          <div className="tree">
-            {connError && <div className="tree-error">{connError}</div>}
-            {schemas.map(([schema, items]) => (
-              <div key={schema}>
-                <div className="schema-row" onClick={() => toggleSchema(schema)}>
-                  <span className="chevron">{collapsed.has(schema) ? "›" : "⌄"}</span>
-                  {schema}
-                  <span className="count">{items.length}</span>
-                </div>
-                {!collapsed.has(schema) &&
-                  items.map((o) => {
-                    const key = `${o.schema}.${o.name}`;
-                    return (
-                      <div
-                        key={key}
-                        className={`item-row ${selected === key ? "selected" : ""}`}
-                        onClick={() => openObject(o)}
-                        title={`${o.kind} ${key}`}
-                      >
-                        <span className={`obj-icon ${o.kind}`}>{KIND_ICON[o.kind] ?? "▦"}</span>
-                        {o.name}
-                      </div>
-                    );
-                  })}
-              </div>
-            ))}
+          <div className="side-tabs">
+            <button
+              className={sideTab === "items" ? "active" : ""}
+              onClick={() => setSideTab("items")}
+            >
+              Items
+            </button>
+            <button
+              className={sideTab === "history" ? "active" : ""}
+              onClick={() => setSideTab("history")}
+            >
+              History
+            </button>
           </div>
+
+          {sideTab === "items" ? (
+            <>
+              <input
+                className="filter"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Search for item…"
+                spellCheck={false}
+              />
+              <div className="tree">
+                {connError && <div className="tree-error">{connError}</div>}
+                {schemas.map(([schema, items]) => (
+                  <div key={schema}>
+                    <div className="schema-row" onClick={() => toggleSchema(schema)}>
+                      <span className="chevron">{collapsed.has(schema) ? "›" : "⌄"}</span>
+                      {schema}
+                      <span className="count">{items.length}</span>
+                    </div>
+                    {!collapsed.has(schema) &&
+                      items.map((o) => {
+                        const key = `${o.schema}.${o.name}`;
+                        return (
+                          <div
+                            key={key}
+                            className={`item-row ${selected === key ? "selected" : ""}`}
+                            onClick={() => openObject(o)}
+                            title={`${o.kind} ${key}`}
+                          >
+                            <span className={`obj-icon ${o.kind}`}>
+                              {KIND_ICON[o.kind] ?? "▦"}
+                            </span>
+                            {o.name}
+                          </div>
+                        );
+                      })}
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              <input
+                className="filter"
+                value={historyFilter}
+                onChange={(e) => setHistoryFilter(e.target.value)}
+                placeholder="Search history…"
+                spellCheck={false}
+              />
+              <div className="tree">
+                {historyEntries.length === 0 && <div className="tree-empty">No queries yet</div>}
+                {historyEntries.map((h) => (
+                  <div
+                    key={h.id}
+                    className="hist-row"
+                    onClick={() => setSql(h.sql)}
+                    title={h.error ?? h.sql}
+                  >
+                    <div className={`hist-sql ${h.error ? "failed" : ""}`}>{h.sql}</div>
+                    <div className="hist-meta">
+                      {timeAgo(h.startedAt)}
+                      {h.error
+                        ? " · failed"
+                        : h.rowCount !== null
+                          ? ` · ${h.rowCount.toLocaleString()} rows`
+                          : ""}
+                      {h.elapsedMs !== null ? ` · ${h.elapsedMs} ms` : ""}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
 
         <div className="main">
