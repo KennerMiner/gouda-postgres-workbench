@@ -250,11 +250,31 @@ body,
 /* --- editor --------------------------------------------------------------- */
 
 .editor-pane {
-  height: 160px;
   min-height: 60px;
-  border-bottom: 1px solid var(--border);
-  resize: vertical;
   overflow: hidden;
+  flex-shrink: 0;
+}
+
+.splitter {
+  height: 5px;
+  margin: -2px 0; /* generous hit area without visual weight */
+  padding: 2px 0;
+  background: var(--border);
+  background-clip: content-box;
+  cursor: row-resize;
+  flex-shrink: 0;
+  z-index: 3;
+}
+
+.splitter:hover,
+body.row-resizing .splitter {
+  background-color: var(--green);
+}
+
+body.row-resizing {
+  cursor: row-resize;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .editor-host {

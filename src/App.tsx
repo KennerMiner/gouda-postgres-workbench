@@ -47,6 +47,7 @@ function App() {
   const [selected, setSelected] = useState<string>("");
 
   const [sql, setSql] = useState(DEFAULT_SQL);
+  const [editorH, setEditorH] = useState(160);
   const [columns, setColumns] = useState<ColumnMeta[]>([]);
   const [rows, setRows] = useState<unknown[][]>([]);
   const [status, setStatus] = useState("");
@@ -156,6 +157,24 @@ function App() {
     return [...bySchema.entries()];
   }, [objects, filter]);
 
+  const startSplitDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = editorH;
+    const move = (ev: MouseEvent) => {
+      const max = window.innerHeight - 220; // keep the results pane usable
+      setEditorH(Math.max(60, Math.min(max, startH + ev.clientY - startY)));
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      document.body.classList.remove("row-resizing");
+    };
+    document.body.classList.add("row-resizing");
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+
   const toggleSchema = (s: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -195,7 +214,10 @@ function App() {
         )}
       </div>
 
-      <div className={`conn-banner ${conn ? "" : "disconnected"}`}>{banner}</div>
+      {/* The banner doubles as a window drag handle — it's the natural grab spot. */}
+      <div className={`conn-banner ${conn ? "" : "disconnected"}`} data-tauri-drag-region>
+        {banner}
+      </div>
 
       <div className="body">
         <div className="sidebar">
@@ -236,9 +258,11 @@ function App() {
         </div>
 
         <div className="main">
-          <div className="editor-pane">
+          <div className="editor-pane" style={{ height: editorH }}>
             <Editor value={sql} onChange={setSql} onRun={runSql} />
           </div>
+
+          <div className="splitter" onMouseDown={startSplitDrag} />
 
           <div className="results">
             {error ? (

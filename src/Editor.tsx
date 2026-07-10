@@ -91,6 +91,7 @@ export default function Editor({ value, onChange, onRun }: Props) {
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           sql({ dialect: PostgreSQL }),
           syntaxHighlighting(highlight),
+          EditorView.lineWrapping,
           theme,
           EditorView.updateListener.of((u) => {
             if (u.docChanged) onChangeRef.current(u.state.doc.toString());
