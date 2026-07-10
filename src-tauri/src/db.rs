@@ -277,12 +277,6 @@ pub async fn run_query(
                 .send(QueryEvent::Rows { rows: batch })
                 .map_err(|e| e.to_string())?;
         }
-        on_event
-            .send(QueryEvent::Done {
-                row_count: total,
-                elapsed_ms: start.elapsed().as_millis() as u64,
-            })
-            .map_err(|e| e.to_string())?;
         Ok(total)
     }
     .await;
@@ -290,6 +284,8 @@ pub async fn run_query(
     let elapsed = start.elapsed().as_millis() as i64;
     match result {
         Ok(total) => {
+            // Record BEFORE emitting Done: the frontend refreshes its history
+            // list on Done, so the row must already be committed.
             crate::history::record(
                 &history,
                 &entry.label,
@@ -299,6 +295,10 @@ pub async fn run_query(
                 Some(total as i64),
                 None,
             );
+            let _ = on_event.send(QueryEvent::Done {
+                row_count: total,
+                elapsed_ms: elapsed as u64,
+            });
         }
         Err(message) => {
             crate::history::record(
