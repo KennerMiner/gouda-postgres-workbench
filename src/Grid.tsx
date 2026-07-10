@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import Inspector, { copyText } from "./Inspector";
+import Inspector from "./Inspector";
+import { copyText } from "./clipboard";
 
 export type ColumnMeta = { name: string; typeName: string; typeOid: number };
 

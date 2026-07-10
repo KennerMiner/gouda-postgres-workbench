@@ -1,22 +1,7 @@
 import { useState } from "react";
 import JsonTree from "./JsonTree";
+import { copyText } from "./clipboard";
 import type { ColumnMeta } from "./Grid";
-
-/** Clipboard write with WKWebView fallback. */
-export async function copyText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    ta.remove();
-  }
-}
 
 // Above this size the tree view gets sluggish; fall back to text.
 const TREE_LIMIT = 200_000;
