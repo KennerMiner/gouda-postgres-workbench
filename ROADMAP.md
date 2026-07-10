@@ -29,7 +29,9 @@ Personal daily driver, macOS-first.
 - [x] Sidebar: per-schema tree of tables/views/matviews/foreign tables with
       filter + click-to-browse (select * limit 500)
 - [x] Live connection banner (server version, user, host, db)
-- [ ] Connection manager: profiles in SQLite, secrets in Keychain, SSL modes
+- [x] Connection manager: profiles in SQLite, passwords in macOS Keychain,
+      manager modal, per-profile banner colors, auto-connect most recent,
+      'heroage local' seeded on first run (SSL modes still TODO)
 - [ ] SSH tunnel support (russh)
 - [ ] Connection pooling + one persistent session per tab (deadpool)
 - [x] CodeMirror 6 editor: Postgres highlighting, ⌘↵ = run selection or

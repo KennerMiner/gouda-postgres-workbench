@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import Editor from "./Editor";
 import Grid, { type ColumnMeta } from "./Grid";
+import ConnectionModal, { type Profile } from "./ConnectionModal";
 import "./App.css";
 
 type QueryEvent =
@@ -22,7 +23,6 @@ type HistoryEntry = {
   error: string | null;
 };
 
-const DEFAULT_DSN = "postgres://heroage:heroage@localhost:5432/heroage";
 const DEFAULT_SQL =
   "select table_name, table_type from information_schema.tables where table_schema = 'public' order by 1;";
 
@@ -32,14 +32,6 @@ const KIND_ICON: Record<string, string> = {
   matview: "▥",
   foreign: "▧",
 };
-
-function hostOf(dsn: string): string {
-  try {
-    return new URL(dsn.replace(/^postgres(ql)?:/, "http:")).hostname || "localhost";
-  } catch {
-    return "?";
-  }
-}
 
 /** Quote an identifier for interpolation into generated SQL. */
 function qi(name: string): string {
@@ -55,7 +47,9 @@ function timeAgo(ms: number): string {
 }
 
 function App() {
-  const [dsn, setDsn] = useState(DEFAULT_DSN);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [activeProfile, setActiveProfile] = useState<Profile | null>(null);
+  const [showConnections, setShowConnections] = useState(false);
   const [conn, setConn] = useState<ConnInfo | null>(null);
   const [connError, setConnError] = useState("");
   const [objects, setObjects] = useState<DbObject[]>([]);
@@ -75,22 +69,56 @@ function App() {
   const [running, setRunning] = useState(false);
   const rowBuffer = useRef<unknown[][]>([]);
 
-  const doConnect = useCallback(async () => {
+  const refreshProfiles = useCallback(async () => {
+    const list = await invoke<Profile[]>("profiles_list");
+    setProfiles(list);
+    return list;
+  }, []);
+
+  const connectProfile = useCallback(async (p: Profile) => {
     setConnError("");
     setConn(null);
     setObjects([]);
     try {
-      const info = await invoke<ConnInfo>("connect", { dsn });
+      const info = await invoke<ConnInfo>("connect_profile", { profileId: p.id });
       setConn(info);
+      setActiveProfile(p);
+      setShowConnections(false);
       setObjects(await invoke<DbObject[]>("list_objects", { connId: info.connId }));
     } catch (e) {
       setConnError(String(e));
+      throw e;
     }
-  }, [dsn]);
+  }, []);
 
-  // Daily-driver behavior: connect to the default DSN on launch.
+  const saveProfile = useCallback(
+    async (p: Profile, password: string | null): Promise<Profile> => {
+      const id = await invoke<number>("profile_save", { profile: p, password });
+      await refreshProfiles();
+      return { ...p, id };
+    },
+    [refreshProfiles],
+  );
+
+  const deleteProfile = useCallback(
+    async (profileId: number) => {
+      await invoke("profile_delete", { profileId });
+      await refreshProfiles();
+    },
+    [refreshProfiles],
+  );
+
+  // Daily-driver behavior: connect to the most recently used profile on launch.
   useEffect(() => {
-    doConnect();
+    (async () => {
+      try {
+        const list = await refreshProfiles();
+        if (list.length > 0) await connectProfile(list[0]);
+        else setShowConnections(true);
+      } catch {
+        // Connect error already surfaced via connError.
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -227,25 +255,29 @@ function App() {
     });
 
   const banner = conn
-    ? `PostgreSQL ${conn.serverVersion} : ${conn.user} : ${hostOf(dsn)} : ${conn.database}`
+    ? `PostgreSQL ${conn.serverVersion} : ${conn.user} : ${activeProfile?.host ?? "?"} : ${conn.database}`
     : connError
       ? "not connected"
       : "connecting…";
+  const bannerColor = conn && activeProfile ? `c-${activeProfile.color}` : "disconnected";
 
   return (
     <div className="app">
       <div className="titlebar" data-tauri-drag-region>
-        <input
-          className="dsn"
-          value={dsn}
-          onChange={(e) => setDsn(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && doConnect()}
-          spellCheck={false}
-          placeholder="postgres://user:pass@host:5432/dbname"
-        />
-        <button className="btn" onClick={doConnect} title="Connect (↵ in DSN field)">
-          {conn ? "Reconnect" : "Connect"}
+        <button className="conn-pill" onClick={() => setShowConnections(true)} title="Connections">
+          <span className={`dot c-${activeProfile?.color ?? "green"}`} />
+          {activeProfile?.name ?? "No connection"}
         </button>
+        {activeProfile && (
+          <button
+            className="btn"
+            onClick={() => connectProfile(activeProfile).catch(() => {})}
+            title="Reconnect"
+          >
+            ↻
+          </button>
+        )}
+        <span className="titlebar-space" data-tauri-drag-region />
         {running ? (
           <button className="btn stop" onClick={stop} title="Cancel query">
             ■ Stop
@@ -258,9 +290,20 @@ function App() {
       </div>
 
       {/* The banner doubles as a window drag handle — it's the natural grab spot. */}
-      <div className={`conn-banner ${conn ? "" : "disconnected"}`} data-tauri-drag-region>
+      <div className={`conn-banner ${bannerColor}`} data-tauri-drag-region>
         {banner}
       </div>
+
+      {showConnections && (
+        <ConnectionModal
+          profiles={profiles}
+          activeId={conn ? (activeProfile?.id ?? null) : null}
+          onSave={saveProfile}
+          onDelete={deleteProfile}
+          onConnect={connectProfile}
+          onClose={() => setShowConnections(false)}
+        />
+      )}
 
       <div className="body">
         <div className="sidebar">

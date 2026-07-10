@@ -1,5 +1,7 @@
 mod db;
 mod history;
+mod profiles;
+mod store;
 
 use tauri::Manager;
 
@@ -9,8 +11,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(db::Connections::default())
         .setup(|app| {
-            let h = history::History::init(app.handle())?;
-            app.manage(h);
+            let s = store::Store::init(app.handle())?;
+            app.manage(s);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -20,7 +22,11 @@ pub fn run() {
             db::list_objects,
             db::run_query,
             history::history_list,
-            history::history_clear
+            history::history_clear,
+            profiles::profiles_list,
+            profiles::profile_save,
+            profiles::profile_delete,
+            profiles::connect_profile
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

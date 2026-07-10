@@ -53,12 +53,12 @@ impl Connections {
     }
 }
 
-fn host_of(dsn: &str) -> String {
-    dsn.parse::<tokio_postgres::Config>()
-        .ok()
-        .and_then(|c| c.get_hosts().first().cloned())
+fn host_of(config: &tokio_postgres::Config) -> String {
+    config
+        .get_hosts()
+        .first()
         .map(|h| match h {
-            tokio_postgres::config::Host::Tcp(s) => s,
+            tokio_postgres::config::Host::Tcp(s) => s.clone(),
             tokio_postgres::config::Host::Unix(p) => p.display().to_string(),
         })
         .unwrap_or_else(|| "?".into())
@@ -67,10 +67,10 @@ fn host_of(dsn: &str) -> String {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnInfo {
-    conn_id: u32,
-    server_version: String,
-    user: String,
-    database: String,
+    pub conn_id: u32,
+    pub server_version: String,
+    pub user: String,
+    pub database: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -103,9 +103,14 @@ pub struct DbObject {
     kind: String,
 }
 
-#[tauri::command]
-pub async fn connect(state: State<'_, Connections>, dsn: String) -> Result<ConnInfo, String> {
-    let (client, connection) = tokio_postgres::connect(&dsn, NoTls)
+/// Open a connection from a prepared Config, run the identity handshake, and
+/// register it. Shared by ad-hoc DSN connect and profile connect.
+pub async fn open_config(
+    state: &Connections,
+    config: tokio_postgres::Config,
+) -> Result<ConnInfo, String> {
+    let (client, connection) = config
+        .connect(NoTls)
         .await
         .map_err(|e| format!("connect: {e}"))?;
 
@@ -130,7 +135,7 @@ pub async fn connect(state: State<'_, Connections>, dsn: String) -> Result<ConnI
     let database: String = row.get(2);
 
     let conn_id = state.next_id.fetch_add(1, Ordering::Relaxed) + 1;
-    let label = format!("{user}@{}/{database}", host_of(&dsn));
+    let label = format!("{user}@{}/{database}", host_of(&config));
     state
         .map
         .lock()
@@ -143,6 +148,14 @@ pub async fn connect(state: State<'_, Connections>, dsn: String) -> Result<ConnI
         user,
         database,
     })
+}
+
+#[tauri::command]
+pub async fn connect(state: State<'_, Connections>, dsn: String) -> Result<ConnInfo, String> {
+    let config = dsn
+        .parse::<tokio_postgres::Config>()
+        .map_err(|e| format!("dsn: {e}"))?;
+    open_config(&state, config).await
 }
 
 /// Cancel whatever is currently running on this connection. Postgres cancel
@@ -219,7 +232,7 @@ pub async fn list_objects(
 #[tauri::command]
 pub async fn run_query(
     state: State<'_, Connections>,
-    history: State<'_, crate::history::History>,
+    history: State<'_, crate::store::Store>,
     conn_id: u32,
     sql: String,
     on_event: Channel<QueryEvent>,
