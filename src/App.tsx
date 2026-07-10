@@ -135,13 +135,15 @@ function App() {
             rowBuffer.current = rowBuffer.current.concat(ev.rows);
             setRows(rowBuffer.current);
             break;
-          case "done":
-            setStatus(
-              `${ev.rowCount.toLocaleString()} row${ev.rowCount === 1 ? "" : "s"} in ${ev.elapsedMs} ms`,
-            );
+          case "done": {
+            // Defensive: a field mismatch from the backend must never kill
+            // the rest of the handler (learned the hard way — see git log).
+            const n = ev.rowCount ?? 0;
+            setStatus(`${n.toLocaleString()} row${n === 1 ? "" : "s"} in ${ev.elapsedMs ?? "?"} ms`);
             setRunning(false);
             loadHistoryRef.current();
             break;
+          }
           case "error":
             setError(ev.message);
             setRunning(false);

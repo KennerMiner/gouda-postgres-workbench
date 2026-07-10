@@ -83,8 +83,11 @@ pub struct ColumnMeta {
 
 /// Streaming protocol sent over the Channel. One `Meta`, then zero or more
 /// `Rows`, terminated by exactly one `Done` or one `Error`.
+///
+/// NB: `rename_all` renames the variant tag only; `rename_all_fields` is what
+/// camel-cases the fields inside variants (row_count -> rowCount).
 #[derive(Serialize, Clone)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum QueryEvent {
     Meta { columns: Vec<ColumnMeta> },
     Rows { rows: Vec<Vec<J>> },
