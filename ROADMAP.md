@@ -24,6 +24,11 @@ Personal daily driver, macOS-first.
 - [x] Type-mapper integration test against live Postgres
 
 ### M1 — MVP daily driver
+- [x] Persistent connection registry (connect once, reuse across queries,
+      evict dead connections, auto-connect on launch)
+- [x] Sidebar: per-schema tree of tables/views/matviews/foreign tables with
+      filter + click-to-browse (select * limit 500)
+- [x] Live connection banner (server version, user, host, db)
 - [ ] Connection manager: profiles in SQLite, secrets in Keychain, SSL modes
 - [ ] SSH tunnel support (russh)
 - [ ] Connection pooling + one persistent session per tab (deadpool)

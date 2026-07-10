@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
@@ -9,6 +9,9 @@ type QueryEvent =
   | { kind: "rows"; rows: unknown[][] }
   | { kind: "done"; rowCount: number; elapsedMs: number }
   | { kind: "error"; message: string };
+
+type ConnInfo = { connId: number; serverVersion: string; user: string; database: string };
+type DbObject = { schema: string; name: string; kind: string };
 
 const DEFAULT_DSN = "postgres://heroage:heroage@localhost:5432/heroage";
 const DEFAULT_SQL =
@@ -25,146 +28,264 @@ const NUMERIC_TYPES = new Set([
   "money",
 ]);
 
-/** Parse enough of a DSN to render the TablePlus-style identity banner. */
-function connIdentity(dsn: string): string {
+const KIND_ICON: Record<string, string> = {
+  table: "▦",
+  view: "▤",
+  matview: "▥",
+  foreign: "▧",
+};
+
+function hostOf(dsn: string): string {
   try {
-    const u = new URL(dsn.replace(/^postgres(ql)?:/, "http:"));
-    const parts = ["PostgreSQL"];
-    if (u.username) parts.push(u.username);
-    parts.push(u.hostname || "localhost");
-    const db = u.pathname.replace(/^\//, "");
-    if (db) parts.push(db);
-    return parts.join(" : ");
+    return new URL(dsn.replace(/^postgres(ql)?:/, "http:")).hostname || "localhost";
   } catch {
-    return "PostgreSQL";
+    return "?";
   }
+}
+
+/** Quote an identifier for interpolation into generated SQL. */
+function qi(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
 }
 
 function App() {
   const [dsn, setDsn] = useState(DEFAULT_DSN);
+  const [conn, setConn] = useState<ConnInfo | null>(null);
+  const [connError, setConnError] = useState("");
+  const [objects, setObjects] = useState<DbObject[]>([]);
+  const [filter, setFilter] = useState("");
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<string>("");
+
   const [sql, setSql] = useState(DEFAULT_SQL);
   const [columns, setColumns] = useState<ColumnMeta[]>([]);
   const [rows, setRows] = useState<unknown[][]>([]);
-  const [status, setStatus] = useState<string>("");
-  const [error, setError] = useState<string>("");
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
   const [running, setRunning] = useState(false);
   const rowBuffer = useRef<unknown[][]>([]);
 
-  const identity = useMemo(() => connIdentity(dsn), [dsn]);
-
-  const run = useCallback(async () => {
-    setRunning(true);
-    setError("");
-    setStatus("");
-    setColumns([]);
-    setRows([]);
-    rowBuffer.current = [];
-
-    const channel = new Channel<QueryEvent>();
-    channel.onmessage = (ev) => {
-      switch (ev.kind) {
-        case "meta":
-          setColumns(ev.columns);
-          break;
-        case "rows":
-          // Accumulate in a ref and hand React the same concatenated array so
-          // each batch is one rerender, not one per row.
-          rowBuffer.current = rowBuffer.current.concat(ev.rows);
-          setRows(rowBuffer.current);
-          break;
-        case "done":
-          setStatus(
-            `${ev.rowCount.toLocaleString()} row${ev.rowCount === 1 ? "" : "s"} in ${ev.elapsedMs} ms`,
-          );
-          setRunning(false);
-          break;
-        case "error":
-          setError(ev.message);
-          setRunning(false);
-          break;
-      }
-    };
-
+  const doConnect = useCallback(async () => {
+    setConnError("");
+    setConn(null);
+    setObjects([]);
     try {
-      await invoke("run_query", { dsn, sql, onEvent: channel });
+      const info = await invoke<ConnInfo>("connect", { dsn });
+      setConn(info);
+      setObjects(await invoke<DbObject[]>("list_objects", { connId: info.connId }));
     } catch (e) {
-      setError(String(e));
-      setRunning(false);
+      setConnError(String(e));
     }
-  }, [dsn, sql]);
+  }, [dsn]);
+
+  // Daily-driver behavior: connect to the default DSN on launch.
+  useEffect(() => {
+    doConnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const runSql = useCallback(
+    async (text: string) => {
+      if (!conn) return;
+      setRunning(true);
+      setError("");
+      setStatus("");
+      setColumns([]);
+      setRows([]);
+      rowBuffer.current = [];
+
+      const channel = new Channel<QueryEvent>();
+      channel.onmessage = (ev) => {
+        switch (ev.kind) {
+          case "meta":
+            setColumns(ev.columns);
+            break;
+          case "rows":
+            // Accumulate in a ref and hand React the same concatenated array
+            // so each batch is one rerender, not one per row.
+            rowBuffer.current = rowBuffer.current.concat(ev.rows);
+            setRows(rowBuffer.current);
+            break;
+          case "done":
+            setStatus(
+              `${ev.rowCount.toLocaleString()} row${ev.rowCount === 1 ? "" : "s"} in ${ev.elapsedMs} ms`,
+            );
+            setRunning(false);
+            break;
+          case "error":
+            setError(ev.message);
+            setRunning(false);
+            break;
+        }
+      };
+
+      try {
+        await invoke("run_query", { connId: conn.connId, sql: text, onEvent: channel });
+      } catch (e) {
+        setError(String(e));
+        setRunning(false);
+      }
+    },
+    [conn],
+  );
+
+  const run = useCallback(() => runSql(sql), [runSql, sql]);
+
+  const openObject = useCallback(
+    (o: DbObject) => {
+      const key = `${o.schema}.${o.name}`;
+      setSelected(key);
+      const text = `select * from ${qi(o.schema)}.${qi(o.name)} limit 500;`;
+      setSql(text);
+      runSql(text);
+    },
+    [runSql],
+  );
 
   const onEditorKey = (e: React.KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
-      if (!running) run();
+      if (!running && conn) run();
     }
   };
+
+  const schemas = useMemo(() => {
+    const f = filter.trim().toLowerCase();
+    const visible = f ? objects.filter((o) => o.name.toLowerCase().includes(f)) : objects;
+    const bySchema = new Map<string, DbObject[]>();
+    for (const o of visible) {
+      const list = bySchema.get(o.schema) ?? [];
+      list.push(o);
+      bySchema.set(o.schema, list);
+    }
+    return [...bySchema.entries()];
+  }, [objects, filter]);
+
+  const toggleSchema = (s: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(s)) next.delete(s);
+      else next.add(s);
+      return next;
+    });
+
+  const banner = conn
+    ? `PostgreSQL ${conn.serverVersion} : ${conn.user} : ${hostOf(dsn)} : ${conn.database}`
+    : connError
+      ? "not connected"
+      : "connecting…";
 
   const align = (c: ColumnMeta) => (NUMERIC_TYPES.has(c.typeName) ? "num" : "");
 
   return (
     <div className="app">
-      {/* Overlay titlebar: this strip sits beside the traffic lights and drags the window. */}
       <div className="titlebar" data-tauri-drag-region>
         <input
           className="dsn"
           value={dsn}
           onChange={(e) => setDsn(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && doConnect()}
           spellCheck={false}
           placeholder="postgres://user:pass@host:5432/dbname"
         />
-        <button className="run" onClick={run} disabled={running} title="Run (⌘↵)">
+        <button className="btn" onClick={doConnect} title="Connect (↵ in DSN field)">
+          {conn ? "Reconnect" : "Connect"}
+        </button>
+        <button className="btn run" onClick={run} disabled={running || !conn} title="Run (⌘↵)">
           {running ? "Running…" : "▶ Run"}
         </button>
       </div>
 
-      <div className="conn-banner">{identity}</div>
+      <div className={`conn-banner ${conn ? "" : "disconnected"}`}>{banner}</div>
 
-      <textarea
-        className="editor"
-        value={sql}
-        onChange={(e) => setSql(e.target.value)}
-        onKeyDown={onEditorKey}
-        spellCheck={false}
-      />
+      <div className="body">
+        <div className="sidebar">
+          <input
+            className="filter"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Search for item…"
+            spellCheck={false}
+          />
+          <div className="tree">
+            {connError && <div className="tree-error">{connError}</div>}
+            {schemas.map(([schema, items]) => (
+              <div key={schema}>
+                <div className="schema-row" onClick={() => toggleSchema(schema)}>
+                  <span className="chevron">{collapsed.has(schema) ? "›" : "⌄"}</span>
+                  {schema}
+                  <span className="count">{items.length}</span>
+                </div>
+                {!collapsed.has(schema) &&
+                  items.map((o) => {
+                    const key = `${o.schema}.${o.name}`;
+                    return (
+                      <div
+                        key={key}
+                        className={`item-row ${selected === key ? "selected" : ""}`}
+                        onClick={() => openObject(o)}
+                        title={`${o.kind} ${key}`}
+                      >
+                        <span className={`obj-icon ${o.kind}`}>{KIND_ICON[o.kind] ?? "▦"}</span>
+                        {o.name}
+                      </div>
+                    );
+                  })}
+              </div>
+            ))}
+          </div>
+        </div>
 
-      <div className="results">
-        {error ? (
-          <div className="error-pane">{error}</div>
-        ) : (
-          columns.length > 0 && (
-            <table>
-              <thead>
-                <tr>
-                  <th className="rownum" />
-                  {columns.map((c, i) => (
-                    <th key={i} className={align(c)} title={c.typeName}>
-                      {c.name}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r, ri) => (
-                  <tr key={ri}>
-                    <td className="rownum">{ri + 1}</td>
-                    {r.map((cell, ci) => (
-                      <td key={ci} className={align(columns[ci])}>
-                        {renderCell(cell)}
-                      </td>
+        <div className="main">
+          <textarea
+            className="editor"
+            value={sql}
+            onChange={(e) => setSql(e.target.value)}
+            onKeyDown={onEditorKey}
+            spellCheck={false}
+          />
+
+          <div className="results">
+            {error ? (
+              <div className="error-pane">{error}</div>
+            ) : (
+              columns.length > 0 && (
+                <table>
+                  <thead>
+                    <tr>
+                      <th className="rownum" />
+                      {columns.map((c, i) => (
+                        <th key={i} className={align(c)} title={c.typeName}>
+                          {c.name}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r, ri) => (
+                      <tr key={ri}>
+                        <td className="rownum">{ri + 1}</td>
+                        {r.map((cell, ci) => (
+                          <td key={ci} className={align(columns[ci])}>
+                            {renderCell(cell)}
+                          </td>
+                        ))}
+                      </tr>
                     ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )
-        )}
-      </div>
+                  </tbody>
+                </table>
+              )
+            )}
+          </div>
 
-      <div className="statusbar">
-        <span className="hint">Run: ⌘↵</span>
-        <span className="rowcount">{running ? "running…" : status}</span>
-        <span className="engine">PostgreSQL</span>
+          <div className="statusbar">
+            <span className="hint">Run: ⌘↵</span>
+            <span className="rowcount">{running ? "running…" : status}</span>
+            <span className="engine">
+              {conn ? `PostgreSQL ${conn.serverVersion}` : "disconnected"}
+            </span>
+          </div>
+        </div>
       </div>
     </div>
   );

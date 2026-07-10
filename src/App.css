@@ -73,7 +73,7 @@ body,
   border-color: var(--green);
 }
 
-.run {
+.btn {
   padding: 4px 14px;
   border: 1px solid var(--border);
   border-radius: 5px;
@@ -85,17 +85,18 @@ body,
   white-space: nowrap;
 }
 
-.run:hover:not(:disabled) {
+.btn:hover:not(:disabled) {
   background: var(--bg-hover);
 }
 
-.run:active:not(:disabled) {
+.btn:active:not(:disabled),
+.btn.run:active:not(:disabled) {
   background: var(--green);
   border-color: var(--green);
   color: #fff;
 }
 
-.run:disabled {
+.btn:disabled {
   opacity: 0.45;
   cursor: default;
 }
@@ -111,6 +112,129 @@ body,
   letter-spacing: 0.02em;
   -webkit-user-select: none;
   user-select: none;
+}
+
+.conn-banner.disconnected {
+  background: var(--bg-header);
+  color: var(--text-dim);
+}
+
+/* --- body: sidebar + main -------------------------------------------------- */
+
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0; /* let children scroll instead of overflowing */
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 220px;
+  min-width: 220px;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+}
+
+.filter {
+  margin: 8px;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11px;
+  outline: none;
+}
+
+.filter:focus {
+  border-color: var(--green);
+}
+
+.tree {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 8px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.tree-error {
+  padding: 8px 12px;
+  color: var(--err);
+  font: 11px var(--mono);
+  white-space: pre-wrap;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.schema-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.schema-row:hover {
+  color: var(--text);
+}
+
+.chevron {
+  width: 10px;
+  font-size: 10px;
+}
+
+.count {
+  margin-left: auto;
+  font-weight: 400;
+  font-size: 10px;
+}
+
+.item-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 10px 2px 25px;
+  height: 22px;
+  font-size: 11.5px;
+  cursor: default;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item-row:hover {
+  background: var(--bg-hover);
+}
+
+.item-row.selected {
+  background: var(--green);
+  color: #fff;
+}
+
+.obj-icon {
+  font-size: 10px;
+  color: #5a9fd4; /* TablePlus-blue table glyphs */
+}
+
+.obj-icon.view,
+.obj-icon.matview {
+  color: #b58fd4;
+}
+
+.item-row.selected .obj-icon {
+  color: #fff;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
 }
 
 /* --- editor --------------------------------------------------------------- */

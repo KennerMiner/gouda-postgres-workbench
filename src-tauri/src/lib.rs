@@ -4,7 +4,13 @@ mod db;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![db::run_query])
+        .manage(db::Connections::default())
+        .invoke_handler(tauri::generate_handler![
+            db::connect,
+            db::disconnect,
+            db::list_objects,
+            db::run_query
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
