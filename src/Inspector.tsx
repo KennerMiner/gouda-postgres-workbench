@@ -1,5 +1,5 @@
-import { useState } from "react";
-import JsonTree from "./JsonTree";
+import { useMemo, useState } from "react";
+import JsonTree, { computeKeep } from "./JsonTree";
 import { copyText } from "./clipboard";
 import type { ColumnMeta } from "./Grid";
 
@@ -24,12 +24,19 @@ export default function Inspector({ column, value, editable, onStage, onClose }:
   const [editMode, setEditMode] = useState(false);
   const [editText, setEditText] = useState("");
   const [editErr, setEditErr] = useState("");
+  const [filter, setFilter] = useState("");
 
   const isJson = value !== null && typeof value === "object";
   const isJsonCol = column.typeName === "json" || column.typeName === "jsonb";
   const compact = isJson ? JSON.stringify(value) : String(value ?? "NULL");
   const pretty = isJson ? JSON.stringify(value, null, 2) : compact;
   const treeable = isJson && compact.length <= TREE_LIMIT;
+
+  const trimmedFilter = filter.trim();
+  const filtered = useMemo(
+    () => (treeable && trimmedFilter ? computeKeep(value, trimmedFilter) : null),
+    [treeable, value, trimmedFilter],
+  );
 
   const doCopy = async (text: string, label: string) => {
     await copyText(text);
@@ -125,9 +132,36 @@ export default function Inspector({ column, value, editable, onStage, onClose }:
               {copied === "compact" ? "✓ Copied" : "Copy"}
             </button>
           </div>
+          {treeable && (
+            <div className="jt-filter-row">
+              <input
+                className="jt-filter"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Filter keys & values…"
+                spellCheck={false}
+              />
+              {filtered && (
+                <span className="jt-matches">
+                  {filtered.matches} match{filtered.matches === 1 ? "" : "es"}
+                </span>
+              )}
+            </div>
+          )}
           <div className="inspector-body">
             {treeable ? (
-              <JsonTree key={treeKey} value={value} defaultDepth={depth} />
+              filtered && filtered.matches === 0 ? (
+                <div className="jt-nomatch">No matches</div>
+              ) : (
+                <JsonTree
+                  key={treeKey}
+                  value={value}
+                  defaultDepth={depth}
+                  column={column.name}
+                  filter={trimmedFilter}
+                  keep={filtered ? filtered.keep : null}
+                />
+              )
             ) : (
               <pre className="inspector-text">
                 {value === null ? "NULL" : isJson ? pretty : String(value)}

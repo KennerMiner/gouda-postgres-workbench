@@ -763,6 +763,69 @@ body.row-resizing {
   font-style: italic;
 }
 
+.jt-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-faint);
+}
+
+.jt-filter {
+  flex: 1;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11px;
+  outline: none;
+}
+
+.jt-filter:focus {
+  border-color: var(--green);
+}
+
+.jt-matches {
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.jt-nomatch {
+  padding: 14px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.json-tree mark {
+  background: rgba(217, 160, 95, 0.4);
+  color: inherit;
+  border-radius: 2px;
+}
+
+.jt-copy {
+  visibility: hidden;
+  margin-left: 6px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.jt-row:hover .jt-copy {
+  visibility: visible;
+}
+
+.jt-copy:hover {
+  color: var(--text);
+  background: var(--bg-header);
+}
+
 /* --- connection manager modal ---------------------------------------------- */
 
 .modal-overlay {
