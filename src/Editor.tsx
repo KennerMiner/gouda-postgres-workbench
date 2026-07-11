@@ -1,11 +1,19 @@
 import { useEffect, useRef } from "react";
 import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection } from "@codemirror/view";
-import { EditorState, Prec } from "@codemirror/state";
+import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { sql, PostgreSQL } from "@codemirror/lang-sql";
+import { autocompletion, completionKeymap } from "@codemirror/autocomplete";
+import { sql, PostgreSQL, type SQLNamespace } from "@codemirror/lang-sql";
 import { HighlightStyle, syntaxHighlighting, bracketMatching } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import { statementAt } from "./sqlStatements";
+
+function sqlExtension(schema: SQLNamespace | null) {
+  return sql({
+    dialect: PostgreSQL,
+    ...(schema ? { schema, defaultSchema: "public" } : {}),
+  });
+}
 
 // Palette mirrors App.css.
 const theme = EditorView.theme(
@@ -26,6 +34,36 @@ const theme = EditorView.theme(
       background: "#2e4a35 !important",
     },
     ".cm-cursor": { borderLeftColor: "#4caf50" },
+    ".cm-tooltip": {
+      background: "#26282a",
+      border: "1px solid #353738",
+      borderRadius: "6px",
+    },
+    ".cm-tooltip.cm-tooltip-autocomplete > ul": {
+      fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
+      fontSize: "11.5px",
+      maxHeight: "220px",
+    },
+    ".cm-tooltip.cm-tooltip-autocomplete > ul > li": {
+      padding: "2px 8px",
+    },
+    ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
+      background: "#2e4a35",
+      color: "#d6d6d6",
+    },
+    ".cm-completionLabel": { color: "#d6d6d6" },
+    ".cm-completionMatchedText": {
+      textDecoration: "none",
+      color: "#4caf50",
+      fontWeight: "600",
+    },
+    ".cm-completionDetail": {
+      color: "#8a8f98",
+      fontStyle: "normal",
+      fontSize: "10px",
+      marginLeft: "1em",
+    },
+    ".cm-completionIcon": { width: "1em", opacity: "0.6" },
   },
   { dark: true },
 );
@@ -46,11 +84,14 @@ type Props = {
   onChange: (text: string) => void;
   /** Called with the SQL to execute: selection if any, else statement under cursor. */
   onRun: (sql: string) => void;
+  /** Live schema for completions; null until the catalog loads. */
+  schema: SQLNamespace | null;
 };
 
-export default function Editor({ value, onChange, onRun }: Props) {
+export default function Editor({ value, onChange, onRun, schema }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
+  const sqlCompartment = useRef(new Compartment());
   // Refs so the CodeMirror keymap (created once) always sees current handlers.
   const onRunRef = useRef(onRun);
   const onChangeRef = useRef(onChange);
@@ -88,8 +129,9 @@ export default function Editor({ value, onChange, onRun }: Props) {
           drawSelection(),
           highlightActiveLine(),
           bracketMatching(),
-          keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
-          sql({ dialect: PostgreSQL }),
+          autocompletion({ activateOnTyping: true, maxRenderedOptions: 60 }),
+          keymap.of([...defaultKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),
+          sqlCompartment.current.of(sqlExtension(null)),
           syntaxHighlighting(highlight),
           EditorView.lineWrapping,
           theme,
@@ -114,6 +156,13 @@ export default function Editor({ value, onChange, onRun }: Props) {
       v.dispatch({ changes: { from: 0, to: current.length, insert: value } });
     }
   }, [value]);
+
+  // Swap in the live schema when the catalog (re)loads.
+  useEffect(() => {
+    view.current?.dispatch({
+      effects: sqlCompartment.current.reconfigure(sqlExtension(schema)),
+    });
+  }, [schema]);
 
   return <div className="editor-host" ref={host} />;
 }

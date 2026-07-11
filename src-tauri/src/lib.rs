@@ -22,6 +22,7 @@ pub fn run() {
             db::cancel_query,
             db::disconnect,
             db::list_objects,
+            db::schema_catalog,
             db::run_query,
             edits::apply_changes,
             history::history_list,

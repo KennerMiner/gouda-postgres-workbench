@@ -52,7 +52,9 @@ Personal daily driver, macOS-first.
 - [ ] Export: CSV / JSON / SQL inserts (COPY TO for big sets)
 
 ### M2 — Better than Beekeeper
-- [ ] Schema-aware autocomplete (live catalog → CodeMirror completions)
+- [x] Schema-aware autocomplete: schema_catalog command (tables/views +
+      columns + formatted types) → lang-sql namespace, reconfigured live on
+      connect; column types as completion detail; themed popup
 - [x] Inline data editing → generated UPDATEs with preview-before-commit:
       protocol-level PK detection (single table + full PK in result, else
       read-only), staged edits w/ amber tint, inline input or inspector

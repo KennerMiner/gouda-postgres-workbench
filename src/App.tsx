@@ -3,6 +3,8 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import Editor from "./Editor";
 import Grid, { type ChangeSet, type ColumnMeta, type EditableInfo } from "./Grid";
 import ConnectionModal, { type Profile } from "./ConnectionModal";
+import { buildNamespace, type CatalogTable } from "./sqlNamespace";
+import type { SQLNamespace } from "@codemirror/lang-sql";
 import "./App.css";
 
 type QueryEvent =
@@ -53,6 +55,7 @@ function App() {
   const [conn, setConn] = useState<ConnInfo | null>(null);
   const [connError, setConnError] = useState("");
   const [objects, setObjects] = useState<DbObject[]>([]);
+  const [schemaNs, setSchemaNs] = useState<SQLNamespace | null>(null);
   const [filter, setFilter] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string>("");
@@ -81,12 +84,20 @@ function App() {
     setConnError("");
     setConn(null);
     setObjects([]);
+    setSchemaNs(null);
     try {
       const info = await invoke<ConnInfo>("connect_profile", { profileId: p.id });
       setConn(info);
       setActiveProfile(p);
       setShowConnections(false);
       setObjects(await invoke<DbObject[]>("list_objects", { connId: info.connId }));
+      // Autocomplete dictionary loads after the sidebar; failures are non-fatal.
+      try {
+        const catalog = await invoke<CatalogTable[]>("schema_catalog", { connId: info.connId });
+        setSchemaNs(buildNamespace(catalog));
+      } catch {
+        // completions just stay keyword-only
+      }
     } catch (e) {
       setConnError(String(e));
       throw e;
@@ -410,7 +421,7 @@ function App() {
 
         <div className="main">
           <div className="editor-pane" style={{ height: editorH }}>
-            <Editor value={sql} onChange={setSql} onRun={runSql} />
+            <Editor value={sql} onChange={setSql} onRun={runSql} schema={schemaNs} />
           </div>
 
           <div className="splitter" onMouseDown={startSplitDrag} />

@@ -354,6 +354,80 @@ pub async fn list_objects(
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogColumn {
+    name: String,
+    data_type: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogTable {
+    schema: String,
+    name: String,
+    columns: Vec<CatalogColumn>,
+}
+
+/// Tables/views with their columns and formatted types — the autocomplete
+/// dictionary. One round trip; rows arrive grouped by table.
+#[tauri::command]
+pub async fn schema_catalog(
+    state: State<'_, Connections>,
+    conn_id: u32,
+) -> Result<Vec<CatalogTable>, String> {
+    let entry = state.get(conn_id).await?;
+    let rows = entry
+        .client
+        .query(
+            r#"select n.nspname,
+                      c.relname,
+                      a.attname,
+                      format_type(a.atttypid, a.atttypmod)
+               from pg_class c
+               join pg_namespace n on n.oid = c.relnamespace
+               join pg_attribute a on a.attrelid = c.oid
+               where c.relkind in ('r', 'p', 'v', 'm', 'f')
+                 and n.nspname <> 'information_schema'
+                 and n.nspname !~ '^pg_'
+                 and a.attnum > 0
+                 and not a.attisdropped
+               order by n.nspname, c.relname, a.attnum"#,
+            &[],
+        )
+        .await
+        .map_err(|e| {
+            let msg = format!("catalog: {}", pg_err(&e));
+            msg
+        });
+    let rows = match rows {
+        Ok(r) => r,
+        Err(e) => {
+            state.drop_if_closed(conn_id, &entry.client).await;
+            return Err(e);
+        }
+    };
+
+    let mut tables: Vec<CatalogTable> = Vec::new();
+    for row in rows {
+        let schema: String = row.get(0);
+        let name: String = row.get(1);
+        let col = CatalogColumn {
+            name: row.get(2),
+            data_type: row.get(3),
+        };
+        match tables.last_mut() {
+            Some(t) if t.schema == schema && t.name == name => t.columns.push(col),
+            _ => tables.push(CatalogTable {
+                schema,
+                name,
+                columns: vec![col],
+            }),
+        }
+    }
+    Ok(tables)
+}
+
 /// Run a single SQL statement on an open connection and stream results.
 ///
 /// Uses the extended protocol (prepare + query_raw), so exactly one statement
