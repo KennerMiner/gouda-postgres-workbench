@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection } from "@codemirror/view";
 import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { autocompletion, completionKeymap } from "@codemirror/autocomplete";
+import { acceptCompletion, autocompletion, completionKeymap } from "@codemirror/autocomplete";
 import { sql, PostgreSQL, type SQLNamespace } from "@codemirror/lang-sql";
 import { HighlightStyle, syntaxHighlighting, bracketMatching } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
@@ -103,6 +103,9 @@ export default function Editor({ value, onChange, onRun, schema }: Props) {
 
     const runKeymap = Prec.highest(
       keymap.of([
+        // Tab accepts the open completion; falls through to indentWithTab
+        // when no completion is active.
+        { key: "Tab", run: acceptCompletion },
         {
           key: "Mod-Enter",
           run: (v) => {
