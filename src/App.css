@@ -763,6 +763,43 @@ body.row-resizing {
   font-style: italic;
 }
 
+.node-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(76, 175, 80, 0.06);
+}
+
+.node-edit-path {
+  font: 10.5px var(--mono);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-edit-text {
+  min-height: 56px;
+  max-height: 140px;
+}
+
+.node-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.node-edit-actions .spacer {
+  flex: 1;
+}
+
+.node-edit-hint {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
 .jt-filter-row {
   display: flex;
   align-items: center;

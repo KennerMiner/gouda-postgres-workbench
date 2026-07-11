@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import JsonTree, { computeKeep } from "./JsonTree";
+import JsonTree, { computeKeep, pgPath, type Path } from "./JsonTree";
 import { copyText } from "./clipboard";
 import type { ColumnMeta } from "./Grid";
 
@@ -13,10 +13,21 @@ type Props = {
   editable?: boolean;
   /** Stage a new value for the cell; null = SET NULL. */
   onStage?: (text: string | null) => void;
+  /** Stage a single-node edit (jsonb_set); value is a JSON literal. */
+  onStageJsonSet?: (path: Path, value: string) => void;
   onClose: () => void;
 };
 
-export default function Inspector({ column, value, editable, onStage, onClose }: Props) {
+type NodeEdit = { path: Path; text: string; err: string };
+
+export default function Inspector({
+  column,
+  value,
+  editable,
+  onStage,
+  onStageJsonSet,
+  onClose,
+}: Props) {
   // Bumping the key remounts the tree so every node re-seeds from defaultDepth.
   const [treeKey, setTreeKey] = useState(0);
   const [depth, setDepth] = useState(2);
@@ -25,6 +36,18 @@ export default function Inspector({ column, value, editable, onStage, onClose }:
   const [editText, setEditText] = useState("");
   const [editErr, setEditErr] = useState("");
   const [filter, setFilter] = useState("");
+  const [nodeEdit, setNodeEdit] = useState<NodeEdit | null>(null);
+
+  const stageNode = () => {
+    if (!nodeEdit || !onStageJsonSet) return;
+    try {
+      // Normalize (and validate) the JSON literal before staging.
+      onStageJsonSet(nodeEdit.path, JSON.stringify(JSON.parse(nodeEdit.text)));
+      setNodeEdit(null);
+    } catch (e) {
+      setNodeEdit({ ...nodeEdit, err: `invalid JSON: ${e}` });
+    }
+  };
 
   const isJson = value !== null && typeof value === "object";
   const isJsonCol = column.typeName === "json" || column.typeName === "jsonb";
@@ -132,6 +155,38 @@ export default function Inspector({ column, value, editable, onStage, onClose }:
               {copied === "compact" ? "✓ Copied" : "Copy"}
             </button>
           </div>
+          {nodeEdit && (
+            <div className="node-edit">
+              <div className="node-edit-path">{pgPath(column.name, nodeEdit.path, false)}</div>
+              <textarea
+                className="inspector-edit node-edit-text"
+                autoFocus
+                value={nodeEdit.text}
+                onChange={(e) => setNodeEdit({ ...nodeEdit, text: e.target.value, err: "" })}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    stageNode();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    setNodeEdit(null);
+                  }
+                }}
+                spellCheck={false}
+              />
+              {nodeEdit.err && <div className="modal-err">{nodeEdit.err}</div>}
+              <div className="node-edit-actions">
+                <span className="node-edit-hint">JSON literal · ⌘↵ stages</span>
+                <span className="spacer" />
+                <button className="btn mini" onClick={() => setNodeEdit(null)}>
+                  Cancel
+                </button>
+                <button className="btn mini primary" onClick={stageNode}>
+                  Stage node
+                </button>
+              </div>
+            </div>
+          )}
           {treeable && (
             <div className="jt-filter-row">
               <input
@@ -160,6 +215,16 @@ export default function Inspector({ column, value, editable, onStage, onClose }:
                   column={column.name}
                   filter={trimmedFilter}
                   keep={filtered ? filtered.keep : null}
+                  onEditNode={
+                    onStageJsonSet
+                      ? (path, current) =>
+                          setNodeEdit({
+                            path,
+                            text: JSON.stringify(current, null, 2),
+                            err: "",
+                          })
+                      : undefined
+                  }
                 />
               )
             ) : (

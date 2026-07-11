@@ -21,11 +21,24 @@ pub struct PkVal {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct JsonSet {
+    /// Path elements as text (array indices sent as their decimal string).
+    path: Vec<String>,
+    /// New node as a JSON literal ("\"x\"", "42", "null", "{...}").
+    value: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CellEdit {
     column: String,
     cast_type: String,
-    /// None = SET NULL.
+    /// None = SET NULL (when `json_sets` is empty).
     value: Option<String>,
+    /// Non-empty = stage node edits as a jsonb_set chain instead of
+    /// rewriting the whole document.
+    #[serde(default)]
+    json_sets: Vec<JsonSet>,
     pk: Vec<PkVal>,
 }
 
@@ -129,16 +142,61 @@ fn build_insert(schema: &str, table: &str, ins: &RowInsert) -> Result<String, St
     ))
 }
 
+/// Postgres text[] literal for a jsonb_set path. Every element is
+/// double-quoted so keys with commas/braces/quotes survive.
+fn pg_text_array(path: &[String]) -> String {
+    let elems: Vec<String> = path
+        .iter()
+        .map(|p| format!("\"{}\"", p.replace('\\', "\\\\").replace('"', "\\\"")))
+        .collect();
+    format!("{{{}}}", elems.join(","))
+}
+
+fn build_json_set_expr(edit: &CellEdit) -> Result<String, String> {
+    if edit.value.is_some() {
+        return Err("edit has both a whole-cell value and json_sets".into());
+    }
+    if edit.cast_type != "json" && edit.cast_type != "jsonb" {
+        return Err(format!("json_sets on non-json column ({})", edit.cast_type));
+    }
+    let json_col = edit.cast_type == "json";
+    let mut expr = qi(&edit.column);
+    if json_col {
+        expr = format!("{expr}::jsonb");
+    }
+    for s in &edit.json_sets {
+        if s.path.is_empty() {
+            return Err("json_set with empty path".into());
+        }
+        // Defense in depth: the value must be valid JSON before it goes near SQL.
+        serde_json::from_str::<serde_json::Value>(&s.value)
+            .map_err(|e| format!("json_set value is not valid JSON: {e}"))?;
+        expr = format!(
+            "jsonb_set({expr}, {}, {}::jsonb)",
+            quote_literal(&pg_text_array(&s.path)),
+            quote_literal(&s.value)
+        );
+    }
+    if json_col {
+        expr = format!("({expr})::json");
+    }
+    Ok(expr)
+}
+
 fn build_statement(schema: &str, table: &str, edit: &CellEdit) -> Result<String, String> {
     check_cast(&edit.cast_type)?;
-    let set = match &edit.value {
-        Some(v) => format!(
-            "{} = {}::{}",
-            qi(&edit.column),
-            quote_literal(v),
-            edit.cast_type
-        ),
-        None => format!("{} = null", qi(&edit.column)),
+    let set = if !edit.json_sets.is_empty() {
+        format!("{} = {}", qi(&edit.column), build_json_set_expr(edit)?)
+    } else {
+        match &edit.value {
+            Some(v) => format!(
+                "{} = {}::{}",
+                qi(&edit.column),
+                quote_literal(v),
+                edit.cast_type
+            ),
+            None => format!("{} = null", qi(&edit.column)),
+        }
     };
     Ok(format!(
         "update {}.{} set {} where {}",
@@ -239,11 +297,19 @@ mod tests {
             column: column.into(),
             cast_type: cast.into(),
             value: value.map(String::from),
+            json_sets: vec![],
             pk: vec![PkVal {
                 column: "id".into(),
                 cast_type: "int4".into(),
                 value: "7".into(),
             }],
+        }
+    }
+
+    fn jset(path: &[&str], value: &str) -> JsonSet {
+        JsonSet {
+            path: path.iter().map(|s| s.to_string()).collect(),
+            value: value.into(),
         }
     }
 
@@ -286,6 +352,63 @@ mod tests {
     fn rejects_missing_pk() {
         let mut e = edit("c", "text", Some("v"));
         e.pk.clear();
+        assert!(build_statement("s", "t", &e).is_err());
+    }
+
+    #[test]
+    fn json_set_single_node() {
+        let mut e = edit("payload", "jsonb", None);
+        e.json_sets = vec![jset(&["rolledStats", "0", "statId"], r#""critBuff""#)];
+        let sql = build_statement("public", "player_items", &e).unwrap();
+        assert_eq!(
+            sql,
+            r#"update "public"."player_items" set "payload" = jsonb_set("payload", '{"rolledStats","0","statId"}', '"critBuff"'::jsonb) where "id" = '7'::int4"#
+        );
+    }
+
+    #[test]
+    fn json_set_chains_in_order() {
+        let mut e = edit("payload", "jsonb", None);
+        e.json_sets = vec![jset(&["grade"], "2"), jset(&["starLevel"], "3")];
+        let sql = build_statement("s", "t", &e).unwrap();
+        assert!(sql.contains(
+            r#"jsonb_set(jsonb_set("payload", '{"grade"}', '2'::jsonb), '{"starLevel"}', '3'::jsonb)"#
+        ));
+    }
+
+    #[test]
+    fn json_set_wraps_plain_json_column() {
+        let mut e = edit("cfg", "json", None);
+        e.json_sets = vec![jset(&["a"], "true")];
+        let sql = build_statement("s", "t", &e).unwrap();
+        assert!(sql.contains(r#""cfg" = (jsonb_set("cfg"::jsonb, '{"a"}', 'true'::jsonb))::json"#));
+    }
+
+    #[test]
+    fn json_set_escapes_path_elements() {
+        let mut e = edit("payload", "jsonb", None);
+        e.json_sets = vec![jset(&[r#"we"ird, key"#], "1")];
+        let sql = build_statement("s", "t", &e).unwrap();
+        assert!(sql.contains(r#"'{"we\"ird, key"}'"#));
+    }
+
+    #[test]
+    fn json_set_rejects_bad_input() {
+        // invalid JSON value
+        let mut e = edit("payload", "jsonb", None);
+        e.json_sets = vec![jset(&["a"], "{oops")];
+        assert!(build_statement("s", "t", &e).is_err());
+        // non-json column
+        let mut e = edit("name", "text", None);
+        e.json_sets = vec![jset(&["a"], "1")];
+        assert!(build_statement("s", "t", &e).is_err());
+        // both whole-value and sets
+        let mut e = edit("payload", "jsonb", Some("{}"));
+        e.json_sets = vec![jset(&["a"], "1")];
+        assert!(build_statement("s", "t", &e).is_err());
+        // empty path
+        let mut e = edit("payload", "jsonb", None);
+        e.json_sets = vec![jset(&[], "1")];
         assert!(build_statement("s", "t", &e).is_err());
     }
 

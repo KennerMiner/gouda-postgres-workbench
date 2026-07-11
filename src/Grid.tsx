@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import Inspector from "./Inspector";
 import { copyText } from "./clipboard";
+import { applyJsonSets, type JsonSetStage } from "./jsonSets";
+import type { Path } from "./JsonTree";
 
 export type ColumnMeta = { name: string; typeName: string; typeOid: number };
 
@@ -16,10 +18,19 @@ type PkVal = { column: string; castType: string; value: string };
 type InsertCell = { column: string; castType: string; value: string | null };
 
 export type ChangeSet = {
-  edits: { column: string; castType: string; value: string | null; pk: PkVal[] }[];
+  edits: {
+    column: string;
+    castType: string;
+    value: string | null;
+    jsonSets?: { path: string[]; value: string }[];
+    pk: PkVal[];
+  }[];
   deletes: { pk: PkVal[] }[];
   inserts: { cells: InsertCell[] }[];
 };
+
+/** A staged cell: whole-value replacement (null = SET NULL) or node edits. */
+type Staged = { kind: "value"; value: string | null } | { kind: "sets"; sets: JsonSetStage[] };
 
 const ROW_H = 24;
 const CHAR_W = 6.6; // approximation for 11.5px system font
@@ -69,8 +80,8 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh }:
   const scrollRef = useRef<HTMLDivElement>(null);
   const [sel, setSel] = useState<Sel | null>(null);
   const [inspecting, setInspecting] = useState(false);
-  // Staged cell edits on existing rows, keyed "row|col". null = SET NULL.
-  const [edits, setEdits] = useState<Map<string, string | null>>(new Map());
+  // Staged cell edits on existing rows, keyed "row|col".
+  const [edits, setEdits] = useState<Map<string, Staged>>(new Map());
   // Row indices staged for deletion.
   const [deletes, setDeletes] = useState<Set<number>>(new Set());
   // Pending new rows: per row, colIdx -> value (null = explicit NULL;
@@ -164,7 +175,8 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh }:
     const key = stagedKey(r, c);
     if (!edits.has(key)) return rows[r][c];
     const staged = edits.get(key)!;
-    if (staged === null) return null;
+    if (staged.kind === "sets") return applyJsonSets(rows[r][c], staged.sets);
+    if (staged.value === null) return null;
     const orig = rows[r][c];
     const isJsonCol =
       columns[c].typeName === "json" ||
@@ -172,12 +184,12 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh }:
       (orig !== null && typeof orig === "object");
     if (isJsonCol) {
       try {
-        return JSON.parse(staged);
+        return JSON.parse(staged.value);
       } catch {
-        return staged;
+        return staged.value;
       }
     }
-    return staged;
+    return staged.value;
   };
 
   const stage = useCallback(
@@ -196,12 +208,41 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh }:
         const orig = rows[r][c];
         const unchanged = value === null ? orig === null : orig !== null && rawText(orig) === value;
         if (unchanged) next.delete(key);
-        else next.set(key, value);
+        else next.set(key, { kind: "value", value });
         return next;
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rows],
+  );
+
+  /** Stage a node-level JSON edit. Whole-value staging (if any) absorbs it. */
+  const stageJsonSet = useCallback(
+    (r: number, c: number, path: Path, value: string) => {
+      setEdits((prev) => {
+        const next = new Map(prev);
+        const key = stagedKey(r, c);
+        const existing = next.get(key);
+        if (existing?.kind === "value" && existing.value !== null) {
+          // Cell already staged as a whole document: fold the node edit in.
+          try {
+            const doc = applyJsonSets(JSON.parse(existing.value), [{ path, value }]);
+            next.set(key, { kind: "value", value: JSON.stringify(doc) });
+            return next;
+          } catch {
+            // fall through to sets form
+          }
+        }
+        const sets = existing?.kind === "sets" ? [...existing.sets] : [];
+        // Re-editing the same node replaces its earlier set.
+        const i = sets.findIndex((s) => s.path.join("") === path.join(""));
+        if (i >= 0) sets[i] = { path, value };
+        else sets.push({ path, value });
+        next.set(key, { kind: "sets", sets });
+        return next;
+      });
+    },
+    [],
   );
 
   const startEdit = useCallback(
@@ -223,7 +264,9 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh }:
       const key = stagedKey(r, c);
       const staged = edits.get(key);
       setEditing({ r, c });
-      setEditText(edits.has(key) ? (staged ?? "") : v === null ? "" : String(v));
+      setEditText(
+        staged?.kind === "value" ? (staged.value ?? "") : v === null ? "" : String(v),
+      );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rows, edits, inserts, editable],
@@ -256,12 +299,16 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh }:
   const buildChanges = (): ChangeSet => ({
     edits: [...edits.entries()]
       .filter(([key]) => !deletes.has(Number(key.split("|")[0])))
-      .map(([key, value]) => {
+      .map(([key, staged]) => {
         const [r, c] = key.split("|").map(Number);
         return {
           column: columns[c].name,
           castType: columns[c].typeName,
-          value,
+          value: staged.kind === "value" ? staged.value : null,
+          jsonSets:
+            staged.kind === "sets"
+              ? staged.sets.map((s) => ({ path: s.path.map(String), value: s.value }))
+              : undefined,
           pk: pkOf(r),
         };
       }),
@@ -493,6 +540,12 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh }:
               stage(sel.r, sel.c, text);
               setInspecting(false);
             }}
+            onStageJsonSet={
+              canEditCol(sel.c) &&
+              (columns[sel.c].typeName === "jsonb" || columns[sel.c].typeName === "json")
+                ? (path, value) => stageJsonSet(sel.r, sel.c, path, value)
+                : undefined
+            }
             onClose={() => setInspecting(false)}
           />
         )}

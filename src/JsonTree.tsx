@@ -10,7 +10,7 @@ import { copyText } from "./clipboard";
  * surviving container is force-expanded.
  */
 
-type Path = (string | number)[];
+export type Path = (string | number)[];
 
 const SEP = "";
 const pathKey = (p: Path) => p.join(SEP);
@@ -138,6 +138,24 @@ function CopyPath({ column, path, scalar }: { column: string; path: Path; scalar
   );
 }
 
+type OnEditNode = (path: Path, current: unknown) => void;
+
+function EditNode({ path, value, onEdit }: { path: Path; value: unknown; onEdit?: OnEditNode }) {
+  if (!onEdit || path.length === 0) return null;
+  return (
+    <button
+      className="jt-copy"
+      title="Edit this node (stages jsonb_set)"
+      onClick={(e) => {
+        e.stopPropagation();
+        onEdit(path, value);
+      }}
+    >
+      ✎
+    </button>
+  );
+}
+
 type NodeProps = {
   name: string | null;
   value: unknown;
@@ -147,9 +165,20 @@ type NodeProps = {
   column: string;
   filter: string;
   keep: Set<string> | null;
+  onEditNode?: OnEditNode;
 };
 
-function JsonNode({ name, value, path, depth, defaultDepth, column, filter, keep }: NodeProps) {
+function JsonNode({
+  name,
+  value,
+  path,
+  depth,
+  defaultDepth,
+  column,
+  filter,
+  keep,
+  onEditNode,
+}: NodeProps) {
   const [open, setOpen] = useState(depth < defaultDepth);
   if (keep !== null && !keep.has(pathKey(path))) return null;
   const expanded = keep !== null ? true : open;
@@ -166,6 +195,7 @@ function JsonNode({ name, value, path, depth, defaultDepth, column, filter, keep
         )}
         <Leaf value={value} filter={filter} />
         <CopyPath column={column} path={path} scalar />
+        <EditNode path={path} value={value} onEdit={onEditNode} />
       </div>
     );
   }
@@ -193,6 +223,7 @@ function JsonNode({ name, value, path, depth, defaultDepth, column, filter, keep
           <span className="jt-summary">{summarize(value)}</span>
         )}
         <CopyPath column={column} path={path} scalar={false} />
+        <EditNode path={path} value={value} onEdit={onEditNode} />
       </div>
       {expanded && (
         <>
@@ -207,6 +238,7 @@ function JsonNode({ name, value, path, depth, defaultDepth, column, filter, keep
               column={column}
               filter={filter}
               keep={keep}
+              onEditNode={onEditNode}
             />
           ))}
           <div className="jt-row" style={{ paddingLeft: depth * 14 }}>
@@ -225,9 +257,17 @@ type Props = {
   column: string;
   filter?: string;
   keep?: Set<string> | null;
+  onEditNode?: OnEditNode;
 };
 
-export default function JsonTree({ value, defaultDepth, column, filter = "", keep = null }: Props) {
+export default function JsonTree({
+  value,
+  defaultDepth,
+  column,
+  filter = "",
+  keep = null,
+  onEditNode,
+}: Props) {
   return (
     <div className="json-tree">
       <JsonNode
@@ -239,6 +279,7 @@ export default function JsonTree({ value, defaultDepth, column, filter = "", kee
         column={column}
         filter={filter}
         keep={keep}
+        onEditNode={onEditNode}
       />
     </div>
   );
