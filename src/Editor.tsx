@@ -2,11 +2,70 @@ import { useEffect, useRef } from "react";
 import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection } from "@codemirror/view";
 import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { acceptCompletion, autocompletion, completionKeymap } from "@codemirror/autocomplete";
+import {
+  acceptCompletion,
+  autocompletion,
+  completionKeymap,
+  completionStatus,
+  startCompletion,
+} from "@codemirror/autocomplete";
 import { sql, PostgreSQL, type SQLNamespace } from "@codemirror/lang-sql";
-import { HighlightStyle, syntaxHighlighting, bracketMatching } from "@codemirror/language";
+import {
+  HighlightStyle,
+  syntaxHighlighting,
+  bracketMatching,
+  syntaxTree,
+} from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import { statementAt } from "./sqlStatements";
+
+/// Keywords whose trailing space should pop the full completion list —
+/// the schema *is* the likely answer right after these.
+const TRIGGER_WORDS = new Set([
+  "from",
+  "join",
+  "update",
+  "into",
+  "table",
+  "select",
+  "where",
+  "and",
+  "or",
+  "on",
+  "set",
+  "by",
+  "having",
+  "returning",
+  "using",
+]);
+
+/**
+ * Context-triggered explicit completion: typing a space after a
+ * completion-hungry keyword (or after a comma) issues the same request as
+ * Ctrl-Space. Quiet inside strings/comments and while a popup is open;
+ * Esc dismisses until the next trigger event.
+ */
+const aggressiveCompletion = EditorView.updateListener.of((u) => {
+  if (!u.docChanged) return;
+  let sawSpace = false;
+  u.changes.iterChanges((_fa, _ta, _fb, _tb, ins) => {
+    if (ins.toString() === " ") sawSpace = true;
+  });
+  if (!sawSpace) return;
+  const state = u.state;
+  if (completionStatus(state) !== null) return;
+  const pos = state.selection.main.head;
+  const before = state.doc.sliceString(Math.max(0, pos - 60), pos);
+  if (!before.endsWith(" ")) return;
+  const node = syntaxTree(state).resolveInner(pos, -1);
+  if (/string|comment/i.test(node.name)) return;
+  const trimmed = before.slice(0, -1).trimEnd();
+  const word = /([A-Za-z_]+)$/.exec(trimmed)?.[1]?.toLowerCase();
+  if (trimmed.endsWith(",") || (word !== undefined && TRIGGER_WORDS.has(word))) {
+    // Defer: dispatching from within an update listener is not allowed.
+    setTimeout(() => startCompletion(u.view), 0);
+  }
+});
 
 function sqlExtension(schema: SQLNamespace | null) {
   return sql({
@@ -133,6 +192,7 @@ export default function Editor({ value, onChange, onRun, schema }: Props) {
           highlightActiveLine(),
           bracketMatching(),
           autocompletion({ activateOnTyping: true, maxRenderedOptions: 60 }),
+          aggressiveCompletion,
           keymap.of([...defaultKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),
           sqlCompartment.current.of(sqlExtension(null)),
           syntaxHighlighting(highlight),
