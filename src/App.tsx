@@ -25,6 +25,19 @@ type HistoryEntry = {
   error: string | null;
 };
 
+type QueryTab = {
+  id: number;
+  title: string;
+  sql: string;
+  lastSql: string;
+  columns: ColumnMeta[];
+  rows: unknown[][];
+  editable: EditableInfo | null;
+  status: string;
+  error: string;
+  running: boolean;
+};
+
 const DEFAULT_SQL =
   "select table_name, table_type from information_schema.tables where table_schema = 'public' order by 1;";
 
@@ -48,6 +61,28 @@ function timeAgo(ms: number): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+/** Tab title from the query's main target table, else a generic name. */
+function tabTitle(sql: string, fallback: string): string {
+  const m = /(?:from|into|update|table)\s+([\w".]+)/i.exec(sql);
+  if (!m) return fallback;
+  return m[1].replace(/"/g, "").split(".").pop() || fallback;
+}
+
+function blankTab(id: number, sql = ""): QueryTab {
+  return {
+    id,
+    title: `Query ${id}`,
+    sql,
+    lastSql: "",
+    columns: [],
+    rows: [],
+    editable: null,
+    status: "",
+    error: "",
+    running: false,
+  };
+}
+
 function App() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [activeProfile, setActiveProfile] = useState<Profile | null>(null);
@@ -63,16 +98,20 @@ function App() {
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
   const [historyFilter, setHistoryFilter] = useState("");
 
-  const [sql, setSql] = useState(DEFAULT_SQL);
+  const [tabs, setTabs] = useState<QueryTab[]>([blankTab(1, DEFAULT_SQL)]);
+  const [activeTabId, setActiveTabId] = useState(1);
+  const nextTabId = useRef(2);
   const [editorH, setEditorH] = useState(160);
-  const [columns, setColumns] = useState<ColumnMeta[]>([]);
-  const [editableInfo, setEditableInfo] = useState<EditableInfo | null>(null);
-  const lastSqlRef = useRef("");
-  const [rows, setRows] = useState<unknown[][]>([]);
-  const [status, setStatus] = useState("");
-  const [error, setError] = useState("");
-  const [running, setRunning] = useState(false);
-  const rowBuffer = useRef<unknown[][]>([]);
+  // Per-tab row accumulation buffers for streaming results.
+  const rowBuffers = useRef(new Map<number, unknown[][]>());
+
+  const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
+  const activeTabIdRef = useRef(activeTabId);
+  activeTabIdRef.current = activeTabId;
+
+  const updateTab = useCallback((id: number, patch: Partial<QueryTab>) => {
+    setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  }, []);
 
   const refreshProfiles = useCallback(async () => {
     const list = await invoke<Profile[]>("profiles_list");
@@ -161,42 +200,55 @@ function App() {
   }, [sideTab, loadHistory]);
 
   const runSql = useCallback(
-    async (text: string) => {
+    async (text: string, tabId?: number) => {
       if (!conn) return;
-      setRunning(true);
-      setError("");
-      setStatus("");
-      setColumns([]);
-      setRows([]);
-      setEditableInfo(null);
-      rowBuffer.current = [];
-      lastSqlRef.current = text;
+      const id = tabId ?? activeTabIdRef.current;
+      rowBuffers.current.set(id, []);
+      setTabs((ts) =>
+        ts.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                title: tabTitle(text, t.title),
+                lastSql: text,
+                columns: [],
+                rows: [],
+                editable: null,
+                status: "",
+                error: "",
+                running: true,
+              }
+            : t,
+        ),
+      );
 
       const channel = new Channel<QueryEvent>();
       channel.onmessage = (ev) => {
         switch (ev.kind) {
           case "meta":
-            setColumns(ev.columns);
-            setEditableInfo(ev.editable ?? null);
+            updateTab(id, { columns: ev.columns, editable: ev.editable ?? null });
             break;
-          case "rows":
+          case "rows": {
             // Accumulate in a ref and hand React the same concatenated array
             // so each batch is one rerender, not one per row.
-            rowBuffer.current = rowBuffer.current.concat(ev.rows);
-            setRows(rowBuffer.current);
+            const buf = (rowBuffers.current.get(id) ?? []).concat(ev.rows);
+            rowBuffers.current.set(id, buf);
+            updateTab(id, { rows: buf });
             break;
+          }
           case "done": {
             // Defensive: a field mismatch from the backend must never kill
             // the rest of the handler (learned the hard way — see git log).
             const n = ev.rowCount ?? 0;
-            setStatus(`${n.toLocaleString()} row${n === 1 ? "" : "s"} in ${ev.elapsedMs ?? "?"} ms`);
-            setRunning(false);
+            updateTab(id, {
+              status: `${n.toLocaleString()} row${n === 1 ? "" : "s"} in ${ev.elapsedMs ?? "?"} ms`,
+              running: false,
+            });
             loadHistoryRef.current();
             break;
           }
           case "error":
-            setError(ev.message);
-            setRunning(false);
+            updateTab(id, { error: ev.message, running: false });
             loadHistoryRef.current();
             break;
         }
@@ -205,18 +257,13 @@ function App() {
       try {
         await invoke("run_query", { connId: conn.connId, sql: text, onEvent: channel });
       } catch (e) {
-        setError(String(e));
-        setRunning(false);
+        updateTab(id, { error: String(e), running: false });
       }
     },
-    [conn],
+    [conn, updateTab],
   );
 
-  // Toolbar Run: whole editor content as one statement batch is not supported
-  // yet, so run the statement under the cursor's home — i.e. the full text if
-  // it is a single statement, else the first. The editor's ⌘↵ handles
-  // statement-under-cursor precisely.
-  const run = useCallback(() => runSql(sql), [runSql, sql]);
+  const run = useCallback(() => runSql(activeTab.sql), [runSql, activeTab.sql]);
 
   const stop = useCallback(async () => {
     if (!conn) return;
@@ -227,15 +274,50 @@ function App() {
     }
   }, [conn]);
 
+  const addTab = useCallback((sql = "") => {
+    const id = nextTabId.current++;
+    setTabs((ts) => [...ts, blankTab(id, sql)]);
+    setActiveTabId(id);
+    return id;
+  }, []);
+
+  const closeTab = useCallback(
+    (id: number) => {
+      setTabs((ts) => {
+        if (ts.length === 1) return ts; // always keep one tab
+        const idx = ts.findIndex((t) => t.id === id);
+        const next = ts.filter((t) => t.id !== id);
+        if (id === activeTabIdRef.current) {
+          setActiveTabId(next[Math.max(0, idx - 1)].id);
+        }
+        rowBuffers.current.delete(id);
+        return next;
+      });
+    },
+    [],
+  );
+
+  // ⌘T = new tab (⌘W stays "close window" — the tab bar × closes tabs).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "t") {
+        e.preventDefault();
+        addTab();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [addTab]);
+
   const openObject = useCallback(
     (o: DbObject) => {
       const key = `${o.schema}.${o.name}`;
       setSelected(key);
       const text = `select * from ${qi(o.schema)}.${qi(o.name)} limit 500;`;
-      setSql(text);
+      updateTab(activeTabIdRef.current, { sql: text });
       runSql(text);
     },
-    [runSql],
+    [runSql, updateTab],
   );
 
   const schemas = useMemo(() => {
@@ -300,7 +382,7 @@ function App() {
           </button>
         )}
         <span className="titlebar-space" data-tauri-drag-region />
-        {running ? (
+        {activeTab.running ? (
           <button className="btn stop" onClick={stop} title="Cancel query">
             ■ Stop
           </button>
@@ -399,7 +481,7 @@ function App() {
                   <div
                     key={h.id}
                     className="hist-row"
-                    onClick={() => setSql(h.sql)}
+                    onClick={() => updateTab(activeTabIdRef.current, { sql: h.sql })}
                     title={h.error ?? h.sql}
                   >
                     <div className={`hist-sql ${h.error ? "failed" : ""}`}>{h.sql}</div>
@@ -420,44 +502,87 @@ function App() {
         </div>
 
         <div className="main">
+          <div className="tab-bar">
+            {tabs.map((t) => (
+              <div
+                key={t.id}
+                className={`tab ${t.id === activeTabId ? "active" : ""}`}
+                onClick={() => setActiveTabId(t.id)}
+                title={t.lastSql || t.sql}
+              >
+                {t.running && <span className="tab-spinner">●</span>}
+                <span className="tab-title">{t.title}</span>
+                {tabs.length > 1 && (
+                  <span
+                    className="tab-close"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      closeTab(t.id);
+                    }}
+                    title="Close tab"
+                  >
+                    ×
+                  </span>
+                )}
+              </div>
+            ))}
+            <button className="tab-add" onClick={() => addTab()} title="New tab (⌘T)">
+              +
+            </button>
+          </div>
+
           <div className="editor-pane" style={{ height: editorH }}>
-            <Editor value={sql} onChange={setSql} onRun={runSql} schema={schemaNs} />
+            <Editor
+              tabId={activeTabId}
+              value={activeTab.sql}
+              onChange={(text) => updateTab(activeTabIdRef.current, { sql: text })}
+              onRun={runSql}
+              schema={schemaNs}
+            />
           </div>
 
           <div className="splitter" onMouseDown={startSplitDrag} />
 
-          <div className="results">
-            {error ? (
-              <div className="error-pane">{error}</div>
-            ) : (
-              columns.length > 0 && (
-                <Grid
-                  columns={columns}
-                  rows={rows}
-                  editable={editableInfo}
-                  applyChanges={(schema, table, changes: ChangeSet, dryRun) =>
-                    invoke<string[]>("apply_changes", {
-                      connId: conn?.connId ?? 0,
-                      schema,
-                      table,
-                      changes,
-                      dryRun,
-                    })
-                  }
-                  refresh={() => {
-                    if (lastSqlRef.current) runSql(lastSqlRef.current);
-                  }}
-                />
-              )
-            )}
-          </div>
+          {/* One results pane per tab, hidden when inactive, so staged edits,
+              selection, and scroll position survive tab switches. */}
+          {tabs.map((t) => (
+            <div
+              key={t.id}
+              className="results"
+              style={t.id === activeTabId ? undefined : { display: "none" }}
+            >
+              {t.error ? (
+                <div className="error-pane">{t.error}</div>
+              ) : (
+                t.columns.length > 0 && (
+                  <Grid
+                    columns={t.columns}
+                    rows={t.rows}
+                    editable={t.editable}
+                    applyChanges={(schema, table, changes: ChangeSet, dryRun) =>
+                      invoke<string[]>("apply_changes", {
+                        connId: conn?.connId ?? 0,
+                        schema,
+                        table,
+                        changes,
+                        dryRun,
+                      })
+                    }
+                    refresh={() => {
+                      if (t.lastSql) runSql(t.lastSql, t.id);
+                    }}
+                  />
+                )
+              )}
+            </div>
+          ))}
 
           <div className="statusbar">
             <span className="hint">
               Run statement: ⌘↵
-              {columns.length > 0 && (editableInfo ? " · editable" : " · read-only")}
+              {activeTab.columns.length > 0 && (activeTab.editable ? " · editable" : " · read-only")}
             </span>
-            <span className="rowcount">{running ? "running…" : status}</span>
+            <span className="rowcount">{activeTab.running ? "running…" : activeTab.status}</span>
             <span className="engine">
               {conn ? `PostgreSQL ${conn.serverVersion}` : "disconnected"}
             </span>

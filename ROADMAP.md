@@ -42,7 +42,9 @@ Personal daily driver, macOS-first.
 - [x] Query cancellation (out-of-band cancel_token, Stop button)
 - [x] Virtualized grid (TanStack Virtual): fixed 24px rows, content-measured
       column widths, sticky header + row gutter
-- [ ] Editor tabs + run-all (multi-statement via simple_query)
+- [x] Editor tabs: per-tab results/status/errors, per-tab editor state
+      (undo/cursor), auto-title from query target, running indicator,
+      ⌘T new / × close (run-all via simple_query still TODO)
 - [x] Grid: cell selection (click/arrows/⌘C/Esc), JSONB/array inspector panel
       with collapsible typed tree + copy pretty/compact; >200KB falls back to
       text view

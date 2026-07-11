@@ -335,6 +335,89 @@ body,
   min-width: 0;
 }
 
+/* --- query tabs ------------------------------------------------------------ */
+
+.tab-bar {
+  display: flex;
+  align-items: stretch;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px 5px 12px;
+  min-width: 90px;
+  max-width: 190px;
+  border-right: 1px solid var(--border-faint);
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: default;
+}
+
+.tab:hover {
+  background: var(--bg-hover);
+}
+
+.tab.active {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-spinner {
+  color: var(--green);
+  font-size: 8px;
+  animation: tab-pulse 1s ease-in-out infinite;
+}
+
+@keyframes tab-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.tab-close {
+  margin-left: auto;
+  padding: 0 4px;
+  border-radius: 3px;
+  color: var(--text-dim);
+  visibility: hidden;
+}
+
+.tab:hover .tab-close,
+.tab.active .tab-close {
+  visibility: visible;
+}
+
+.tab-close:hover {
+  background: var(--bg-header);
+  color: var(--text);
+}
+
+.tab-add {
+  padding: 0 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.tab-add:hover {
+  color: var(--text);
+}
+
 /* --- editor --------------------------------------------------------------- */
 
 .editor-pane {

@@ -140,6 +140,8 @@ const highlight = HighlightStyle.define([
 ]);
 
 type Props = {
+  /** Identity of the current tab; each tab keeps its own EditorState. */
+  tabId: number;
   value: string;
   onChange: (text: string) => void;
   /** Called with the SQL to execute: selection if any, else statement under cursor. */
@@ -148,15 +150,22 @@ type Props = {
   schema: SQLNamespace | null;
 };
 
-export default function Editor({ value, onChange, onRun, schema }: Props) {
+export default function Editor({ tabId, value, onChange, onRun, schema }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const sqlCompartment = useRef(new Compartment());
+  // Per-tab editor states (undo history, cursor, scroll) + the extension
+  // array from mount, reused when a fresh tab needs a state.
+  const tabStates = useRef(new Map<number, EditorState>());
+  const prevTabId = useRef(tabId);
+  const extensionsRef = useRef<import("@codemirror/state").Extension | null>(null);
   // Refs so the CodeMirror keymap (created once) always sees current handlers.
   const onRunRef = useRef(onRun);
   const onChangeRef = useRef(onChange);
+  const schemaRef = useRef(schema);
   onRunRef.current = onRun;
   onChangeRef.current = onChange;
+  schemaRef.current = schema;
 
   useEffect(() => {
     if (!host.current) return;
@@ -181,35 +190,54 @@ export default function Editor({ value, onChange, onRun, schema }: Props) {
       ]),
     );
 
+    const extensions = [
+      runKeymap,
+      lineNumbers(),
+      history(),
+      drawSelection(),
+      highlightActiveLine(),
+      bracketMatching(),
+      autocompletion({ activateOnTyping: true, maxRenderedOptions: 60 }),
+      aggressiveCompletion,
+      keymap.of([...defaultKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),
+      sqlCompartment.current.of(sqlExtension(null)),
+      syntaxHighlighting(highlight),
+      EditorView.lineWrapping,
+      theme,
+      EditorView.updateListener.of((u) => {
+        if (u.docChanged) onChangeRef.current(u.state.doc.toString());
+      }),
+    ];
+    extensionsRef.current = extensions;
+
     const v = new EditorView({
       parent: host.current,
-      state: EditorState.create({
-        doc: value,
-        extensions: [
-          runKeymap,
-          lineNumbers(),
-          history(),
-          drawSelection(),
-          highlightActiveLine(),
-          bracketMatching(),
-          autocompletion({ activateOnTyping: true, maxRenderedOptions: 60 }),
-          aggressiveCompletion,
-          keymap.of([...defaultKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),
-          sqlCompartment.current.of(sqlExtension(null)),
-          syntaxHighlighting(highlight),
-          EditorView.lineWrapping,
-          theme,
-          EditorView.updateListener.of((u) => {
-            if (u.docChanged) onChangeRef.current(u.state.doc.toString());
-          }),
-        ],
-      }),
+      state: EditorState.create({ doc: value, extensions }),
     });
     view.current = v;
     return () => v.destroy();
     // Mount once; external value changes are pushed in the effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Tab switch: save the outgoing tab's full editor state (undo history,
+  // cursor, scroll) and restore/create the incoming one. Runs before the
+  // value-sync effect below, which then sees the doc already correct.
+  useEffect(() => {
+    const v = view.current;
+    if (!v || prevTabId.current === tabId) return;
+    tabStates.current.set(prevTabId.current, v.state);
+    prevTabId.current = tabId;
+    const saved = tabStates.current.get(tabId);
+    v.setState(
+      saved ?? EditorState.create({ doc: value, extensions: extensionsRef.current! }),
+    );
+    // A stored state may carry a stale schema config — re-apply the live one.
+    v.dispatch({
+      effects: sqlCompartment.current.reconfigure(sqlExtension(schemaRef.current)),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabId]);
 
   // Push programmatic changes (e.g. sidebar click) into the editor.
   useEffect(() => {
