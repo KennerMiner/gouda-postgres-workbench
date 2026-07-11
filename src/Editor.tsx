@@ -6,7 +6,6 @@ import {
   acceptCompletion,
   autocompletion,
   completionKeymap,
-  completionStatus,
   startCompletion,
 } from "@codemirror/autocomplete";
 import { sql, PostgreSQL, type SQLNamespace } from "@codemirror/lang-sql";
@@ -53,7 +52,6 @@ const aggressiveCompletion = EditorView.updateListener.of((u) => {
   });
   if (!sawSpace) return;
   const state = u.state;
-  if (completionStatus(state) !== null) return;
   const pos = state.selection.main.head;
   const before = state.doc.sliceString(Math.max(0, pos - 60), pos);
   if (!before.endsWith(" ")) return;
@@ -62,7 +60,10 @@ const aggressiveCompletion = EditorView.updateListener.of((u) => {
   const trimmed = before.slice(0, -1).trimEnd();
   const word = /([A-Za-z_]+)$/.exec(trimmed)?.[1]?.toLowerCase();
   if (trimmed.endsWith(",") || (word !== undefined && TRIGGER_WORDS.has(word))) {
-    // Defer: dispatching from within an update listener is not allowed.
+    // Defer: dispatching inside an update listener is not allowed. Fire
+    // unconditionally — the plugin is often "pending" here on a query that
+    // resolves to nothing (a bare space matches no source), and an explicit
+    // startCompletion cleanly replaces it.
     setTimeout(() => startCompletion(u.view), 0);
   }
 });
