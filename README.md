@@ -79,7 +79,9 @@ A Postgres workbench for macOS — fast, keyboard-first. Tauri v2 + Rust + React
   generated SQL never auto-runs
 - *Initialize AI context*: the agent explores the database read-only through
   `psql` and writes an editable `AGENTS.md` describing the data (enum values,
-  JSON shapes, conventions), which future requests read automatically
+  JSON shapes, conventions), which future requests read automatically. Claude
+  Code's exploration is scoped to `psql`; Codex/opencode need an explicit
+  opt-in (they have no scoped equivalent and run unsandboxed)
 
 **Command palette** (⌘K) — every command, every table, every saved query.
 

@@ -86,6 +86,8 @@ pub fn run() {
             ai::ai_save_context,
             ai::ai_providers,
             ai::ai_set_provider,
+            ai::ai_get_bypass,
+            ai::ai_set_bypass,
             write_file,
             open_new_window,
             profiles::profiles_list,

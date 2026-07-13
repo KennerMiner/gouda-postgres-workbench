@@ -582,9 +582,11 @@ function App() {
   const [aiProviders, setAiProviders] = useState<
     { id: string; label: string; available: boolean; current: boolean }[]
   >([]);
+  const [aiBypass, setAiBypass] = useState(false);
   const loadProviders = useCallback(async () => {
     try {
       setAiProviders(await invoke("ai_providers"));
+      setAiBypass(await invoke("ai_get_bypass"));
     } catch {
       // AI provider list is non-critical
     }
@@ -1046,6 +1048,20 @@ function App() {
           }
         },
       })),
+      {
+        id: "ai-bypass",
+        label: `${aiBypass ? "Disable" : "Enable"} AI shell access (Codex / opencode)`,
+        group: "ai",
+        hint: aiBypass ? "on — runs psql unsandboxed" : "off — needed for their DB exploration",
+        run: async () => {
+          try {
+            await invoke("ai_set_bypass", { enabled: !aiBypass });
+            await loadProviders();
+          } catch {
+            // ignore
+          }
+        },
+      },
       { id: "new-tab", label: "New tab", group: "cmd", hint: "⌘T", run: () => addTab() },
       {
         id: "run-all",
@@ -1187,6 +1203,7 @@ function App() {
     aiExplore,
     aiOpenContext,
     aiProviders,
+    aiBypass,
     loadProviders,
   ]);
 

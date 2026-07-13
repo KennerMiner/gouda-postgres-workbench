@@ -42,8 +42,14 @@ fn current_provider(store: &Store) -> String {
 }
 
 /// Shell command (argument to `zsh -lc`) for a provider. The prompt is read
-/// from $PSQLV_PROMPT to avoid shell-quoting hazards. `explore` enables the
-/// tool/permission flags each harness needs to run `psql`.
+/// from $PSQLV_PROMPT to avoid shell-quoting hazards.
+///
+/// Generation (`explore = false`) never runs shell commands, so it carries no
+/// permission flags. Exploration needs the agent to run `psql`:
+///   - Claude Code uses a *scoped* allowlist (`Bash(psql:*)`) — safe, always on.
+///   - Codex / opencode have no scoped equivalent for non-interactive runs;
+///     they need a full sandbox bypass, so exploration is gated on the
+///     user-set `ai_allow_bypass` opt-in (see `bypass_required` / callers).
 fn provider_command(id: &str, explore: bool) -> &'static str {
     match (id, explore) {
         ("codex", false) => r#"codex exec --skip-git-repo-check "$PSQLV_PROMPT""#,
@@ -57,6 +63,20 @@ fn provider_command(id: &str, explore: bool) -> &'static str {
         (_, false) => r#"claude -p "$PSQLV_PROMPT""#,
         (_, true) => r#"claude -p "$PSQLV_PROMPT" --allowedTools "Bash(psql:*)""#,
     }
+}
+
+/// Whether this provider's exploration needs the sandbox-bypass opt-in.
+/// Claude Code's scoped allowlist doesn't; the others do.
+fn bypass_required(id: &str) -> bool {
+    id == "codex" || id == "opencode"
+}
+
+fn bypass_enabled(store: &Store) -> bool {
+    state_get_inner(store, "ai_allow_bypass")
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("true")
 }
 
 /// opencode emits a stream of JSON events on stdout; pull the assistant text
@@ -168,6 +188,17 @@ pub fn ai_set_provider(store: tauri::State<'_, Store>, provider: String) -> Resu
     state_set_inner(&store, "ai_provider", &provider)
 }
 
+/// The opt-in for running Codex/opencode exploration without sandboxing.
+#[tauri::command]
+pub fn ai_get_bypass(store: tauri::State<'_, Store>) -> Result<bool, String> {
+    Ok(bypass_enabled(&store))
+}
+
+#[tauri::command]
+pub fn ai_set_bypass(store: tauri::State<'_, Store>, enabled: bool) -> Result<(), String> {
+    state_set_inner(&store, "ai_allow_bypass", if enabled { "true" } else { "false" })
+}
+
 // --- context file -----------------------------------------------------------
 
 #[tauri::command]
@@ -267,6 +298,18 @@ pub async fn ai_explore_context(
     schema: String,
 ) -> Result<String, String> {
     let provider = current_provider(&store);
+    if bypass_required(&provider) && !bypass_enabled(&store) {
+        let label = PROVIDERS
+            .iter()
+            .find(|(id, _)| *id == provider)
+            .map(|(_, l)| *l)
+            .unwrap_or(&provider);
+        return Err(format!(
+            "Database exploration with {label} runs shell commands without sandboxing. \
+             Enable “Allow AI shell access (Codex / opencode)” from the command palette \
+             to opt in. (Claude Code's exploration is scoped to psql and needs no bypass.)"
+        ));
+    }
     let (profile, password) = crate::profiles::load_profile_with_password(&store, profile_id)?;
 
     // Keep the tunnel alive for the whole exploration.
