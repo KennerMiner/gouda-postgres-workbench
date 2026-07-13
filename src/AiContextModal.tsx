@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type Props = {
   /** Exploration in flight vs document ready for review. */
@@ -12,6 +12,10 @@ type Props = {
 
 export default function AiContextModal({ phase, text, error, profileName, onSave, onClose }: Props) {
   const [draft, setDraft] = useState(text);
+
+  // The modal mounts in the "exploring" phase with empty text; when the doc
+  // arrives useState's initial value is stale — sync it.
+  useEffect(() => setDraft(text), [text]);
 
   return (
     <div className="modal-overlay" onMouseDown={(e) => e.target === e.currentTarget && phase === "ready" && onClose()}>

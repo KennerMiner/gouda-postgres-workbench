@@ -99,8 +99,15 @@ pub async fn ai_generate_query(
     .map_err(|_| "claude CLI timed out after 180s".to_string())?
     .map_err(|e| format!("claude CLI: {e}"))?;
 
+    eprintln!(
+        "[ai] generate: status={} stdout={}B stderr={}B",
+        out.status,
+        out.stdout.len(),
+        out.stderr.len()
+    );
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
+        eprintln!("[ai] generate stderr: {}", stderr.trim());
         return Err(format!(
             "claude CLI failed ({}): {}",
             out.status,
@@ -213,7 +220,17 @@ pub async fn ai_explore_context(
     .map_err(|_| "exploration timed out after 10 minutes".to_string())?
     .map_err(|e| format!("claude CLI: {e}"))?;
 
+    eprintln!(
+        "[ai] explore: status={} stdout={}B stderr={}B",
+        out.status,
+        out.stdout.len(),
+        out.stderr.len()
+    );
     if !out.status.success() {
+        eprintln!(
+            "[ai] explore stderr: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
         return Err(format!(
             "claude CLI failed ({}): {}",
             out.status,
