@@ -276,7 +276,8 @@ pub(crate) fn load_profile_with_password(
         let conn = store.0.lock().map_err(|e| e.to_string())?;
         conn.query_row(
             "select id, name, host, port, dbname, username, color, last_used_at,
-                    ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_key_path, read_only
+                    ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_key_path, read_only,
+                    ssl_mode
              from profiles where id = ?1",
             [profile_id],
             |r| {
