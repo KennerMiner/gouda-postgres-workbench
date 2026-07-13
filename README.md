@@ -1,10 +1,7 @@
 # psqlViewer
 
-A fast, keyboard-first PostgreSQL client for macOS, in the spirit of TablePlus —
-built with Tauri v2, Rust, and React. ~18 MB app, sub-second launch, streams
-results as they arrive.
-
-Born as a weekend "how hard can it be" project; grew into a daily driver.
+A fast, keyboard-first PostgreSQL client for macOS. Tauri v2 + Rust + React;
+~18 MB app, results stream as they arrive.
 
 ## Features
 
@@ -12,10 +9,9 @@ Born as a weekend "how hard can it be" project; grew into a daily driver.
 - Saved profiles with passwords in the **macOS Keychain** (never on disk)
 - **SSH tunnels** (pure-Rust russh: agent + key auth, known_hosts verification)
 - **TLS** (`disable` / `require` / `verify-full`)
-- Per-profile **banner colors** — the glance-level prod-vs-dev safety cue
+- Per-profile **banner colors** to distinguish prod from dev at a glance
 - Per-profile **read-only mode** (`default_transaction_read_only`, server-enforced)
-- **Multiple windows** (⌘⇧N), one connection each — you can't fat-finger a
-  prod query into the wrong tab because the wrong tab is in another window
+- **Multiple windows** (⌘⇧N), one connection per window
 - Auto-reconnect + retry after laptop sleep; connection test button
 
 **Editor**
@@ -27,8 +23,8 @@ Born as a weekend "how hard can it be" project; grew into a daily driver.
   queries run concurrently, transactions are per-tab (statusbar
   Begin / Commit / Rollback with aborted-state tracking)
 - **psql backslash commands**: `\du` `\l` `\dn` `\dt` `\dv` `\df` `\dx` `\di`
-  `\ds` `\d <table>` `\conninfo` `\?` — translated client-side exactly like
-  psql does it, results land in the grid (sortable, exportable)
+  `\ds` `\d <table>` `\conninfo` `\?` — translated client-side into catalog
+  queries; results land in the grid (sortable, exportable)
 - Tabs restore across launches; saved queries with names (sidebar + palette)
 
 **Results grid**
@@ -39,11 +35,11 @@ Born as a weekend "how hard can it be" project; grew into a daily driver.
 - **JSONB inspector**: collapsible typed tree, key/value filter,
   copy-as-Postgres-path (`"payload"->'items'->0->>'id'`)
 
-**Editing (the safe kind)**
-- Editable only when the result maps to one table with its full primary key
-  present (detected from the wire protocol — never guessed)
-- Staged edits → **preview the exact SQL** → transactional apply where every
-  statement must hit exactly one row or everything rolls back
+**Editing**
+- Results are editable only when they map to a single table with its full
+  primary key present (detected from the wire protocol)
+- Staged edits → preview the exact SQL → transactional apply; every statement
+  must affect exactly one row or the batch rolls back
 - Row insert (DEFAULT-aware) and delete; **node-level JSONB edits** staged as
   surgical `jsonb_set` calls that don't clobber sibling keys
 - Confirm-before-run for `UPDATE`/`DELETE` without `WHERE`, `TRUNCATE`, `DROP`
@@ -55,20 +51,19 @@ Born as a weekend "how hard can it be" project; grew into a daily driver.
 - **Activity monitor**: live `pg_stat_activity` with cancel / kill per session
 - **Schema diff** between two profiles (columns, indexes, constraints)
 - **LISTEN/NOTIFY console** with live event log and test sender
-- **ER diagram** from the FK graph — draggable, positions persist
+- **ER diagram** from the FK graph (draggable; positions persist)
 - Structure view (columns / indexes / constraints), sidebar schema browser
   with column lists, server browser (roles, databases, settings…)
 
 **Export** — CSV / JSON streamed server → file with no row cap.
 
 **Ask AI** (optional; uses the [`claude` CLI](https://claude.com/claude-code)
-if installed — no API key)
-- ⌘K → *Ask AI*: describe a query, get it back commented, into a tab —
-  never auto-runs
-- *Initialize AI context*: Claude explores your database **read-only** through
-  `psql` and writes a `CLAUDE.md` of what the data actually means (enum
-  values, JSON shapes, gotchas), which future asks read automatically.
-  Fully editable.
+if installed — no API key required)
+- ⌘K → *Ask AI*: describe a query, receive it as commented SQL in a tab;
+  generated SQL never auto-runs
+- *Initialize AI context*: Claude explores the database read-only through
+  `psql` and writes an editable `CLAUDE.md` describing the data (enum values,
+  JSON shapes, conventions), which future requests read automatically
 
 **Command palette** (⌘K) — every command, every table, every saved query.
 
@@ -121,11 +116,11 @@ cd src-tauri && cargo test   # needs a local Postgres; PSQLVIEWER_TEST_DSN to po
 npx vitest run               # frontend unit tests
 ```
 
-## Status & roadmap
+## Status
 
-Feature-complete for daily use; see [ROADMAP.md](ROADMAP.md) for the full
-build log. macOS-first: the Keychain integration and window chrome are
-macOS-specific; Linux/Windows would need porting work (PRs welcome).
+See [ROADMAP.md](ROADMAP.md). macOS-only for now: the Keychain integration
+and window chrome are macOS-specific; Linux/Windows would need porting work
+(PRs welcome).
 
 ## License
 
