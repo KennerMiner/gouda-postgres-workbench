@@ -650,8 +650,69 @@ function App() {
       return next;
     });
 
+  /** Ask-AI: generate a commented query into a fresh tab. Never auto-runs. */
+  const aiAsk = useCallback(
+    async (prompt: string) => {
+      // Gather context BEFORE creating the tab (which changes the active tab).
+      const truncCell = (v: unknown) => {
+        if (v === null) return null;
+        const s = typeof v === "object" ? JSON.stringify(v) : String(v);
+        return s.length > 200 ? s.slice(0, 200) + "…" : s;
+      };
+      const schemaLines = catalog
+        .map(
+          (t) =>
+            `${t.schema}.${t.name} (${t.columns.map((c) => `${c.name} ${c.dataType}`).join(", ")})`,
+        )
+        .join("\n");
+      const samples: string[] = [];
+      for (const t of tabsRef.current) {
+        if (!t.columns.length || !t.rows.length) continue;
+        const name = t.editable ? `${t.editable.schema}.${t.editable.table}` : t.title;
+        const rows = t.rows
+          .slice(0, 3)
+          .map((r) => Object.fromEntries(t.columns.map((c, i) => [c.name, truncCell(r[i])])));
+        samples.push(`-- ${name}\n${JSON.stringify(rows)}`);
+      }
+      const currentSql = tabsRef.current.find((t) => t.id === activeTabIdRef.current)?.sql ?? "";
+      const context = [
+        "=== SCHEMA (PostgreSQL) ===",
+        schemaLines || "(no schema loaded)",
+        "",
+        "=== SAMPLE ROWS (already fetched in this client) ===",
+        samples.join("\n").slice(0, 8000) || "(none)",
+        "",
+        "=== CURRENT EDITOR SQL ===",
+        currentSql.slice(0, 2000),
+      ].join("\n");
+
+      const id = addTab(`-- ✦ ${prompt}\n-- generating…`);
+      updateTab(id, { title: prompt.slice(0, 24) || "AI query", customTitle: true, running: true });
+      try {
+        const sql = await invoke<string>("ai_generate_query", { prompt, context });
+        updateTab(id, { sql: `-- ✦ ${prompt}\n${sql}`, running: false });
+      } catch (e) {
+        updateTab(id, {
+          sql: `-- ✦ ${prompt}\n-- generation failed`,
+          error: String(e),
+          running: false,
+        });
+      }
+    },
+    [catalog, addTab, updateTab],
+  );
+
   const paletteItems = useMemo<PaletteItem[]>(() => {
     const items: PaletteItem[] = [
+      {
+        id: "ai",
+        label: "Ask AI for a query…",
+        group: "ai",
+        prompt: {
+          placeholder: "Describe the query you want…",
+          submit: (p) => aiAsk(p),
+        },
+      },
       { id: "new-tab", label: "New tab", group: "cmd", hint: "⌘T", run: () => addTab() },
       {
         id: "run-all",
@@ -774,6 +835,7 @@ function App() {
     updateTab,
     loadSnippets,
     exportTab,
+    aiAsk,
   ]);
 
   const banner = conn

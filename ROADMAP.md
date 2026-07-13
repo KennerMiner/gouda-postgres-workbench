@@ -79,6 +79,13 @@ Personal daily driver, macOS-first.
       (default_transaction_read_only, server-enforced), grid editing gated
 - [ ] Light theme
 
+### Extras (landed along the way)
+- [x] Session persistence: tabs restore across launches (app_state KV)
+- [x] Saved queries: snippets + sidebar Queries tab + palette flows
+- [x] Ask AI (⌘K): claude CLI generates a commented query into a new tab —
+      schema + already-fetched sample rows as context, never auto-runs
+      (Anthropic API provider is the planned upgrade path)
+
 ### M3 — Postgres-native flex
 - [ ] pg_stat_activity monitor + kill backend
 - [ ] Table/index size + bloat stats

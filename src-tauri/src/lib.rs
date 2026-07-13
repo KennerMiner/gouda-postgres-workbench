@@ -1,3 +1,4 @@
+mod ai;
 mod db;
 mod edits;
 mod history;
@@ -42,6 +43,7 @@ pub fn run() {
             snippets::snippet_delete,
             store::state_get,
             store::state_set,
+            ai::ai_generate_query,
             write_file,
             profiles::profiles_list,
             profiles::profile_save,
