@@ -3,6 +3,22 @@
 A Postgres workbench for macOS — fast, keyboard-first. Tauri v2 + Rust + React;
 ~18 MB app, results stream as they arrive.
 
+![Query editor and results grid](docs/screenshots/grid.png)
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/explain.png" alt="Visual EXPLAIN"><br><sub><b>Visual EXPLAIN</b> — plan tree with time bars and self-time heat</sub></td>
+    <td width="50%"><img src="docs/screenshots/jsonb-inspector.png" alt="JSONB inspector"><br><sub><b>JSONB inspector</b> — collapsible typed tree, filter, copy-as-path</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/er-diagram.png" alt="ER diagram"><br><sub><b>ER diagram</b> — draggable FK graph</sub></td>
+    <td width="50%"><img src="docs/screenshots/command-palette.png" alt="Command palette"><br><sub><b>Command palette</b> (⌘K) — commands, tables, snippets</sub></td>
+  </tr>
+</table>
+
+![Activity monitor](docs/screenshots/activity-monitor.png)
+<sub><b>Activity monitor</b> — live <code>pg_stat_activity</code> with cancel / kill per session</sub>
+
 ## Features
 
 **Connections**
