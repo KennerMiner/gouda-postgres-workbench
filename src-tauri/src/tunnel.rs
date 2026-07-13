@@ -220,16 +220,20 @@ pub async fn open(ssh: SshParams, target_host: String, target_port: u16) -> Resu
 mod tests {
     use super::*;
 
-    /// End-to-end: tunnel to the dev bastion, then run a query on a Postgres
-    /// that only listens on the bastion's localhost. Requires `ssh dev` to
-    /// work non-interactively; run explicitly:
-    ///   cargo test tunnel_end_to_end -- --ignored --nocapture
+    /// End-to-end: tunnel to a bastion, then run a query on a Postgres that
+    /// only listens on the bastion's localhost. All parameters come from the
+    /// environment; run explicitly:
+    ///   PSQLV_SSH_HOST=… PSQLV_SSH_USER=… PSQLV_DB_NAME=… PSQLV_DB_USER=… \
+    ///   PSQLV_DB_PASSWORD=… cargo test tunnel_end_to_end -- --ignored --nocapture
     #[tokio::test]
     #[ignore]
     async fn tunnel_end_to_end() {
         let host =
             std::env::var("PSQLV_SSH_HOST").expect("set PSQLV_SSH_HOST to the bastion hostname");
         let user = std::env::var("PSQLV_SSH_USER").unwrap_or_else(|_| "admin".into());
+        let db_name = std::env::var("PSQLV_DB_NAME").expect("set PSQLV_DB_NAME");
+        let db_user = std::env::var("PSQLV_DB_USER").expect("set PSQLV_DB_USER");
+        let db_password = std::env::var("PSQLV_DB_PASSWORD").expect("set PSQLV_DB_PASSWORD");
 
         let tunnel = open(
             SshParams {
@@ -248,9 +252,9 @@ mod tests {
         config
             .host("127.0.0.1")
             .port(tunnel.local_port)
-            .dbname("tunneltest")
-            .user("tunneltest")
-            .password("tunneltest")
+            .dbname(&db_name)
+            .user(&db_user)
+            .password(&db_password)
             .connect_timeout(std::time::Duration::from_secs(10));
         let (client, connection) = config.connect(tokio_postgres::NoTls).await.expect("pg connect");
         tokio::spawn(connection);
