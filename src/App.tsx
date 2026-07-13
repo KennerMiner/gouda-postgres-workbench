@@ -579,6 +579,19 @@ function App() {
   readOnlyRef.current = readOnly;
   const [snippets, setSnippets] = useState<Snippet[]>([]);
   const [showPalette, setShowPalette] = useState(false);
+  const [aiProviders, setAiProviders] = useState<
+    { id: string; label: string; available: boolean; current: boolean }[]
+  >([]);
+  const loadProviders = useCallback(async () => {
+    try {
+      setAiProviders(await invoke("ai_providers"));
+    } catch {
+      // AI provider list is non-critical
+    }
+  }, []);
+  useEffect(() => {
+    loadProviders();
+  }, [loadProviders]);
   const [aiCtx, setAiCtx] = useState<{ phase: "exploring" | "ready"; text: string; error: string } | null>(null);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
@@ -1019,6 +1032,20 @@ function App() {
         group: "ai",
         run: () => aiOpenContext(),
       },
+      ...aiProviders.map((p) => ({
+        id: `ai-provider-${p.id}`,
+        label: `AI provider: ${p.label}${p.current ? " ✓" : ""}`,
+        group: "ai",
+        hint: p.available ? (p.current ? "current" : "installed") : "not installed",
+        run: async () => {
+          try {
+            await invoke("ai_set_provider", { provider: p.id });
+            await loadProviders();
+          } catch {
+            // ignore
+          }
+        },
+      })),
       { id: "new-tab", label: "New tab", group: "cmd", hint: "⌘T", run: () => addTab() },
       {
         id: "run-all",
@@ -1159,6 +1186,8 @@ function App() {
     openSpecial,
     aiExplore,
     aiOpenContext,
+    aiProviders,
+    loadProviders,
   ]);
 
   const banner = conn

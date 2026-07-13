@@ -1,42 +1,113 @@
-//! "Ask AI" query generation, provider: the `claude` CLI (uses the user's
-//! existing Claude Code login — no API key to manage). The provider seam is
-//! this one command; an Anthropic-API backend can slot in later.
+//! "Ask AI" query generation and schema exploration, via a local AI CLI.
 //!
-//! Per-profile context lives as a real CLAUDE.md in an app-data directory
-//! used as the CLI's cwd — claude picks it up natively as project memory.
+//! Three harnesses are supported — Claude Code (`claude`), Codex (`codex`),
+//! and opencode (`opencode`) — so users work with whatever they already have
+//! set up. The provider is a stored preference (auto-detected on first use).
+//!
+//! Per-profile context lives as an `AGENTS.md` in an app-data directory used
+//! as the CLI's working dir; all three harnesses read AGENTS.md as project
+//! memory. (Claude Code also reads CLAUDE.md — kept as a load fallback.)
 
 use std::path::PathBuf;
 use tauri::Manager;
-use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-/// Per-profile working dir for the claude CLI; its CLAUDE.md is the explored
-/// database context.
-fn ctx_dir(app: &tauri::AppHandle, profile_id: i64) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("ai")
-        .join(profile_id.to_string());
-    std::fs::create_dir_all(&dir).map_err(|e| format!("ai dir: {e}"))?;
-    Ok(dir)
+use crate::store::{state_get_inner, state_set_inner, Store};
+
+/// (id, display label, binary name). Order = auto-detect preference.
+const PROVIDERS: [(&str, &str); 3] = [("claude", "Claude Code"), ("codex", "Codex"), ("opencode", "opencode")];
+
+fn is_available(bin: &str) -> bool {
+    std::process::Command::new("/bin/zsh")
+        .arg("-lc")
+        .arg(format!("command -v {bin}"))
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
-#[tauri::command]
-pub fn ai_load_context(app: tauri::AppHandle, profile_id: i64) -> Result<Option<String>, String> {
-    let path = ctx_dir(&app, profile_id)?.join("CLAUDE.md");
-    match std::fs::read_to_string(&path) {
-        Ok(s) => Ok(Some(s)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("read context: {e}")),
+/// Current provider id: the stored preference if still valid, else the first
+/// installed one, else "claude".
+fn current_provider(store: &Store) -> String {
+    if let Ok(Some(saved)) = state_get_inner(store, "ai_provider") {
+        if PROVIDERS.iter().any(|(id, _)| *id == saved) {
+            return saved;
+        }
+    }
+    PROVIDERS
+        .iter()
+        .find(|(id, _)| is_available(id))
+        .map(|(id, _)| id.to_string())
+        .unwrap_or_else(|| "claude".into())
+}
+
+/// Shell command (argument to `zsh -lc`) for a provider. The prompt is read
+/// from $PSQLV_PROMPT to avoid shell-quoting hazards. `explore` enables the
+/// tool/permission flags each harness needs to run `psql`.
+fn provider_command(id: &str, explore: bool) -> &'static str {
+    match (id, explore) {
+        ("codex", false) => r#"codex exec --skip-git-repo-check "$PSQLV_PROMPT""#,
+        ("codex", true) => {
+            r#"codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "$PSQLV_PROMPT""#
+        }
+        ("opencode", false) => r#"opencode run --format json "$PSQLV_PROMPT""#,
+        ("opencode", true) => {
+            r#"opencode run --format json --dangerously-skip-permissions "$PSQLV_PROMPT""#
+        }
+        (_, false) => r#"claude -p "$PSQLV_PROMPT""#,
+        (_, true) => r#"claude -p "$PSQLV_PROMPT" --allowedTools "Bash(psql:*)""#,
     }
 }
 
-#[tauri::command]
-pub fn ai_save_context(app: tauri::AppHandle, profile_id: i64, text: String) -> Result<(), String> {
-    let path = ctx_dir(&app, profile_id)?.join("CLAUDE.md");
-    std::fs::write(&path, text).map_err(|e| format!("write context: {e}"))
+/// opencode emits a stream of JSON events on stdout; pull the assistant text
+/// parts out of it. Defensive: any `{"type":"text","text":...}` node counts,
+/// tried as one JSON doc then as JSON-lines, with raw stdout as a fallback.
+fn extract_opencode(stdout: &str) -> String {
+    fn walk(v: &serde_json::Value, out: &mut String) {
+        match v {
+            serde_json::Value::Object(m) => {
+                if m.get("type").and_then(|t| t.as_str()) == Some("text") {
+                    if let Some(s) = m.get("text").and_then(|t| t.as_str()) {
+                        out.push_str(s);
+                        return;
+                    }
+                }
+                for val in m.values() {
+                    walk(val, out);
+                }
+            }
+            serde_json::Value::Array(a) => {
+                for val in a {
+                    walk(val, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = String::new();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(stdout) {
+        walk(&v, &mut out);
+    } else {
+        for line in stdout.lines() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) {
+                walk(&v, &mut out);
+            }
+        }
+    }
+    if out.trim().is_empty() {
+        stdout.to_string()
+    } else {
+        out
+    }
+}
+
+fn extract_output(id: &str, stdout: &str) -> String {
+    let raw = if id == "opencode" {
+        extract_opencode(stdout)
+    } else {
+        stdout.to_string()
+    };
+    strip_fences(&raw)
 }
 
 /// Models sometimes wrap output in markdown fences despite instructions.
@@ -52,88 +123,150 @@ fn strip_fences(s: &str) -> String {
     t.to_string()
 }
 
+/// Per-profile working dir for the CLI; its AGENTS.md is the explored context.
+fn ctx_dir(app: &tauri::AppHandle, profile_id: i64) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("ai")
+        .join(profile_id.to_string());
+    std::fs::create_dir_all(&dir).map_err(|e| format!("ai dir: {e}"))?;
+    Ok(dir)
+}
+
+// --- provider preference commands -------------------------------------------
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderInfo {
+    id: String,
+    label: String,
+    available: bool,
+    current: bool,
+}
+
+#[tauri::command]
+pub fn ai_providers(store: tauri::State<'_, Store>) -> Result<Vec<ProviderInfo>, String> {
+    let cur = current_provider(&store);
+    Ok(PROVIDERS
+        .iter()
+        .map(|(id, label)| ProviderInfo {
+            id: id.to_string(),
+            label: label.to_string(),
+            available: is_available(id),
+            current: *id == cur,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub fn ai_set_provider(store: tauri::State<'_, Store>, provider: String) -> Result<(), String> {
+    if !PROVIDERS.iter().any(|(id, _)| *id == provider) {
+        return Err(format!("unknown provider: {provider}"));
+    }
+    state_set_inner(&store, "ai_provider", &provider)
+}
+
+// --- context file -----------------------------------------------------------
+
+#[tauri::command]
+pub fn ai_load_context(app: tauri::AppHandle, profile_id: i64) -> Result<Option<String>, String> {
+    let dir = ctx_dir(&app, profile_id)?;
+    for name in ["AGENTS.md", "CLAUDE.md"] {
+        match std::fs::read_to_string(dir.join(name)) {
+            Ok(s) => return Ok(Some(s)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("read context: {e}")),
+        }
+    }
+    Ok(None)
+}
+
+#[tauri::command]
+pub fn ai_save_context(app: tauri::AppHandle, profile_id: i64, text: String) -> Result<(), String> {
+    let path = ctx_dir(&app, profile_id)?.join("AGENTS.md");
+    std::fs::write(&path, text).map_err(|e| format!("write context: {e}"))
+}
+
+// --- generation -------------------------------------------------------------
+
 #[tauri::command]
 pub async fn ai_generate_query(
     app: tauri::AppHandle,
+    store: tauri::State<'_, Store>,
     profile_id: i64,
     prompt: String,
     context: String,
 ) -> Result<String, String> {
-    let instruction = format!(
-        "Using the PostgreSQL schema and sample data provided on stdin (plus your CLAUDE.md \
-         notes about this database, if present), write a single PostgreSQL query for this \
-         request: {prompt}\n\
+    let provider = current_provider(&store);
+    let full = format!(
+        "Using the PostgreSQL schema and sample data below (plus your AGENTS.md notes about \
+         this database, if present), write a single PostgreSQL query for this request: {prompt}\n\
          Respond with ONLY SQL — no markdown fences, no prose outside SQL comments. \
          Start with a short block of '--' comments explaining the approach, then the query \
          itself with brief inline '--' comments on non-obvious parts. \
-         Use only tables and columns that exist in the provided schema."
+         Use only tables and columns that exist in the provided schema.\n\n{context}"
     );
 
-    // zsh -lc: GUI apps get a minimal PATH; a login shell finds `claude`.
-    // The instruction travels in an env var to avoid shell-quoting hazards.
-    // cwd = the profile's context dir so its CLAUDE.md loads as project memory.
-    let mut child = Command::new("/bin/zsh")
+    // zsh -lc: GUI apps get a minimal PATH; a login shell finds the CLI.
+    // cwd = the profile's context dir so its AGENTS.md loads as project memory.
+    let out = Command::new("/bin/zsh")
         .arg("-lc")
-        .arg(r#"claude -p "$PSQLV_INSTRUCTION""#)
-        .env("PSQLV_INSTRUCTION", &instruction)
+        .arg(provider_command(&provider, false))
+        .env("PSQLV_PROMPT", &full)
         .current_dir(ctx_dir(&app, profile_id)?)
-        .stdin(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| format!("failed to launch claude CLI: {e}"))?;
+        .map_err(|e| format!("failed to launch {provider}: {e}"))?
+        .wait_with_output();
+    let out = tokio::time::timeout(std::time::Duration::from_secs(180), out)
+        .await
+        .map_err(|_| format!("{provider} timed out after 180s"))?
+        .map_err(|e| format!("{provider}: {e}"))?;
 
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(context.as_bytes())
-            .await
-            .map_err(|e| format!("claude stdin: {e}"))?;
-        // Dropping stdin closes the pipe so the CLI stops reading.
-    }
-
-    let out = tokio::time::timeout(
-        std::time::Duration::from_secs(180),
-        child.wait_with_output(),
-    )
-    .await
-    .map_err(|_| "claude CLI timed out after 180s".to_string())?
-    .map_err(|e| format!("claude CLI: {e}"))?;
-
+    let stderr = String::from_utf8_lossy(&out.stderr);
     eprintln!(
-        "[ai] generate: status={} stdout={}B stderr={}B",
+        "[ai] generate ({provider}): status={} stdout={}B stderr={}B",
         out.status,
         out.stdout.len(),
         out.stderr.len()
     );
     if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        eprintln!("[ai] generate stderr: {}", stderr.trim());
-        return Err(format!(
-            "claude CLI failed ({}): {}",
-            out.status,
-            stderr.trim()
-        ));
+        return Err(format!("{provider} failed ({}): {}", out.status, stderr.trim()));
     }
 
-    let sql = strip_fences(&String::from_utf8_lossy(&out.stdout));
+    let sql = extract_output(&provider, &String::from_utf8_lossy(&out.stdout));
     if sql.trim().is_empty() {
-        return Err("claude returned no output".into());
+        return Err(format!(
+            "{provider} returned no usable output.{}",
+            if stderr.trim().is_empty() {
+                String::new()
+            } else {
+                format!("\n\n{}", stderr.trim())
+            }
+        ));
     }
     Ok(sql)
 }
 
-/// Agentic schema exploration: claude gets `psql` (read-only session via
+// --- exploration ------------------------------------------------------------
+
+/// Agentic schema exploration: the CLI gets `psql` (read-only session via
 /// PGOPTIONS) preconfigured through env vars — the password never appears in
-/// any prompt or command line — and writes a reference document about what
-/// the data actually means. Tunnel-aware for SSH profiles.
+/// any prompt or command line — and writes a reference document (AGENTS.md)
+/// about what the data actually means. Tunnel-aware for SSH profiles.
 #[tauri::command]
 pub async fn ai_explore_context(
     app: tauri::AppHandle,
-    store: tauri::State<'_, crate::store::Store>,
+    store: tauri::State<'_, Store>,
     profile_id: i64,
     guidance: String,
     schema: String,
 ) -> Result<String, String> {
+    let provider = current_provider(&store);
     let (profile, password) = crate::profiles::load_profile_with_password(&store, profile_id)?;
 
     // Keep the tunnel alive for the whole exploration.
@@ -167,27 +300,28 @@ pub async fn ai_explore_context(
     } else {
         format!("\nThe user adds this guidance: {guidance}\n")
     };
-    let instruction = format!(
+    let full = format!(
         "You have READ-ONLY access to a PostgreSQL database through the `psql` command — \
          the connection is preconfigured via environment variables, so just run \
          `psql -c \"...\"`. Explore the database to understand what the data MEANS, not \
          just its shape: sample rows from the important tables (limit 5), check distinct \
          values of enum-like/status columns, follow foreign keys, peek inside JSON \
-         payloads. The schema catalog is provided on stdin as a starting point. If a \
-         CLAUDE.md already exists in your working directory from a previous exploration, \
+         payloads. The schema catalog is provided below as a starting point. If an \
+         AGENTS.md already exists in your working directory from a previous exploration, \
          refine and extend it rather than starting over.{extra}\n\
          Then output ONLY a concise markdown reference document (under 250 lines) covering: \
          each significant table's purpose, key columns and their meanings, relationships, \
          discovered enum/status values and what they appear to mean, JSON payload shapes, \
          and gotchas (soft deletes, units, denormalizations). This document becomes the \
-         CLAUDE.md that a query-writing AI reads later — optimize for that reader."
+         AGENTS.md that a query-writing AI reads later — optimize for that reader.\n\n\
+         === SCHEMA ===\n{schema}"
     );
 
     let dir = ctx_dir(&app, profile_id)?;
     let mut cmd = Command::new("/bin/zsh");
     cmd.arg("-lc")
-        .arg(r#"claude -p "$PSQLV_INSTRUCTION" --allowedTools "Bash(psql:*)""#)
-        .env("PSQLV_INSTRUCTION", &instruction)
+        .arg(provider_command(&provider, true))
+        .env("PSQLV_PROMPT", &full)
         .current_dir(&dir)
         .env("PGHOST", &host)
         .env("PGPORT", port.to_string())
@@ -195,55 +329,45 @@ pub async fn ai_explore_context(
         .env("PGDATABASE", &profile.dbname)
         .env("PGOPTIONS", "-c default_transaction_read_only=on")
         .env("PGCONNECT_TIMEOUT", "10")
-        .stdin(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     if let Some(pw) = &password {
         cmd.env("PGPASSWORD", pw);
     }
-    let mut child = cmd
+    let out = cmd
         .spawn()
-        .map_err(|e| format!("failed to launch claude CLI: {e}"))?;
+        .map_err(|e| format!("failed to launch {provider}: {e}"))?
+        .wait_with_output();
+    let out = tokio::time::timeout(std::time::Duration::from_secs(600), out)
+        .await
+        .map_err(|_| "exploration timed out after 10 minutes".to_string())?
+        .map_err(|e| format!("{provider}: {e}"))?;
 
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(schema.as_bytes())
-            .await
-            .map_err(|e| format!("claude stdin: {e}"))?;
-    }
-
-    let out = tokio::time::timeout(
-        std::time::Duration::from_secs(600),
-        child.wait_with_output(),
-    )
-    .await
-    .map_err(|_| "exploration timed out after 10 minutes".to_string())?
-    .map_err(|e| format!("claude CLI: {e}"))?;
-
+    let stderr = String::from_utf8_lossy(&out.stderr);
     eprintln!(
-        "[ai] explore: status={} stdout={}B stderr={}B",
+        "[ai] explore ({provider}): status={} stdout={}B stderr={}B",
         out.status,
         out.stdout.len(),
         out.stderr.len()
     );
     if !out.status.success() {
-        eprintln!(
-            "[ai] explore stderr: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+        return Err(format!("{provider} failed ({}): {}", out.status, stderr.trim()));
+    }
+    let doc = extract_output(&provider, &String::from_utf8_lossy(&out.stdout));
+    if doc.trim().is_empty() {
         return Err(format!(
-            "claude CLI failed ({}): {}",
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim()
+            "exploration returned no output.{}",
+            if stderr.trim().is_empty() {
+                String::new()
+            } else {
+                format!("\n\n{}", stderr.trim())
+            }
         ));
     }
-    let doc = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if doc.is_empty() {
-        return Err("exploration returned no output".into());
-    }
-    // Persist as the profile's CLAUDE.md — future ai_generate_query calls run
-    // with this directory as cwd and pick it up automatically.
-    std::fs::write(dir.join("CLAUDE.md"), &doc).map_err(|e| format!("write context: {e}"))?;
+    // Persist as AGENTS.md — future ai_generate_query calls run with this
+    // directory as cwd and pick it up automatically.
+    std::fs::write(dir.join("AGENTS.md"), &doc).map_err(|e| format!("write context: {e}"))?;
     Ok(doc)
 }
 
@@ -257,5 +381,27 @@ mod tests {
         assert_eq!(strip_fences("```\nselect 1;\n```"), "select 1;");
         assert_eq!(strip_fences("select 1;"), "select 1;");
         assert_eq!(strip_fences("-- note\nselect 1;"), "-- note\nselect 1;");
+    }
+
+    #[test]
+    fn provider_commands_are_distinct() {
+        assert!(provider_command("claude", false).starts_with("claude -p"));
+        assert!(provider_command("codex", false).contains("codex exec --skip-git-repo-check"));
+        assert!(provider_command("codex", true).contains("--dangerously-bypass-approvals-and-sandbox"));
+        assert!(provider_command("opencode", false).contains("opencode run --format json"));
+        assert!(provider_command("opencode", true).contains("--dangerously-skip-permissions"));
+        assert!(provider_command("claude", true).contains("--allowedTools"));
+    }
+
+    #[test]
+    fn opencode_extracts_text_parts() {
+        // one JSON doc
+        let one = r#"{"parts":[{"type":"text","text":"select 1;"}]}"#;
+        assert_eq!(extract_opencode(one).trim(), "select 1;");
+        // json-lines with a tool event and a text event
+        let lines = "{\"type\":\"tool\",\"name\":\"bash\"}\n{\"type\":\"text\",\"text\":\"select 2;\"}";
+        assert_eq!(extract_opencode(lines).trim(), "select 2;");
+        // unparseable → raw fallback
+        assert_eq!(extract_opencode("select 3;").trim(), "select 3;");
     }
 }

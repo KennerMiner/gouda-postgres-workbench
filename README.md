@@ -72,12 +72,13 @@ A Postgres workbench for macOS — fast, keyboard-first. Tauri v2 + Rust + React
 
 **Export** — CSV / JSON streamed server → file with no row cap.
 
-**Ask AI** (optional; uses the [`claude` CLI](https://claude.com/claude-code)
-if installed — no API key required)
+**Ask AI** (optional; uses a local AI CLI you already have — no API key)
+- Works with **Claude Code** (`claude`), **Codex** (`codex`), or **opencode**
+  (`opencode`) — auto-detected, switchable from the command palette
 - ⌘K → *Ask AI*: describe a query, receive it as commented SQL in a tab;
   generated SQL never auto-runs
-- *Initialize AI context*: Claude explores the database read-only through
-  `psql` and writes an editable `CLAUDE.md` describing the data (enum values,
+- *Initialize AI context*: the agent explores the database read-only through
+  `psql` and writes an editable `AGENTS.md` describing the data (enum values,
   JSON shapes, conventions), which future requests read automatically
 
 **Command palette** (⌘K) — every command, every table, every saved query.

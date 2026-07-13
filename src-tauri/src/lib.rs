@@ -84,6 +84,8 @@ pub fn run() {
             ai::ai_explore_context,
             ai::ai_load_context,
             ai::ai_save_context,
+            ai::ai_providers,
+            ai::ai_set_provider,
             write_file,
             open_new_window,
             profiles::profiles_list,
