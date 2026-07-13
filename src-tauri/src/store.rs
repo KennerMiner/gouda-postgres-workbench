@@ -44,6 +44,7 @@ impl Store {
             "alter table profiles add column ssh_user text not null default ''",
             "alter table profiles add column ssh_key_path text not null default ''",
             "alter table profiles add column read_only integer not null default 0",
+            "alter table profiles add column ssl_mode text not null default 'disable'",
         ] {
             let _ = conn.execute(stmt, []);
         }

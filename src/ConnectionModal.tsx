@@ -17,6 +17,8 @@ export type Profile = {
   sshKeyPath: string;
   /** Sessions open with default_transaction_read_only = on. */
   readOnly: boolean;
+  /** "disable" | "require" | "verify-full". */
+  sslMode: string;
 };
 
 export const PROFILE_COLORS = ["green", "blue", "purple", "amber", "red"] as const;
@@ -36,6 +38,7 @@ const BLANK: Profile = {
   sshUser: "",
   sshKeyPath: "",
   readOnly: false,
+  sslMode: "disable",
 };
 
 type Props = {
@@ -182,6 +185,18 @@ export default function ConnectionModal({
               onChange={(e) => setPassword(e.target.value)}
               placeholder={form.id !== null ? "•••••• (unchanged)" : ""}
             />
+          </label>
+          <label>
+            SSL
+            <select
+              className="ssl-select"
+              value={form.sslMode}
+              onChange={(e) => set("sslMode", e.target.value)}
+            >
+              <option value="disable">disable — plaintext (local / SSH tunnel)</option>
+              <option value="require">require — encrypted, no cert check (RDS etc.)</option>
+              <option value="verify-full">verify-full — encrypted + system trust store</option>
+            </select>
           </label>
           <label className="ssh-toggle">
             <span className="ssh-toggle-row">

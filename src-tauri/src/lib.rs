@@ -58,6 +58,7 @@ pub fn run() {
             db::table_structure,
             db::run_query,
             db::exec_session,
+            db::export_query,
             db::set_read_only,
             db::close_session,
             db::explain_query,

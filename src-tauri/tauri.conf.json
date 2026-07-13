@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "psqlviewer",
+  "productName": "psqlViewer",
   "version": "0.1.0",
   "identifier": "com.kminer.psqlviewer",
   "build": {
@@ -27,7 +27,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": "app",
+    "macOS": {
+      "signingIdentity": "Apple Development: Kenneth Miner (4S2CB3QTH3)"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

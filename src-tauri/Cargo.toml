@@ -33,4 +33,6 @@ rusqlite = { version = "0.40.1", features = ["bundled"] }
 keyring = { version = "3", features = ["apple-native"] }
 russh = "0.62.2"
 tauri-plugin-dialog = "2.7.1"
+postgres-native-tls = "0.5.3"
+native-tls = "0.2.18"
 

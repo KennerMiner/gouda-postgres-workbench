@@ -9,7 +9,6 @@ import PlanView, { type PlanRoot } from "./PlanView";
 import StructureView, { type TableStructure } from "./StructureView";
 import { splitStatements } from "./sqlStatements";
 import { buildNamespace, type CatalogTable } from "./sqlNamespace";
-import { toCsv, toJson } from "./export";
 import { META_HELP, SERVER_QUERIES, translateMeta } from "./metaCommands";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { SQLNamespace } from "@codemirror/lang-sql";
@@ -799,20 +798,30 @@ function App() {
     [updateTab],
   );
 
-  /** Export a tab's result set through the native save dialog. */
+  /** Export the FULL result of the tab's last query — streamed server→file,
+      no 50k cap. */
   const exportTab = useCallback(async (tabId: number, format: "csv" | "json") => {
     const t = tabsRef.current.find((x) => x.id === tabId);
-    if (!t || t.columns.length === 0) return;
+    const connId = connRef.current?.connId;
+    if (!t || !t.lastSql || !connId) return;
     const base = (t.editable?.table ?? t.title.replace(/\W+/g, "_") ?? "results").toLowerCase();
     const path = await save({
       defaultPath: `${base}.${format}`,
       filters: [{ name: format.toUpperCase(), extensions: [format] }],
     });
     if (!path) return;
-    const contents = format === "csv" ? toCsv(t.columns, t.rows) : toJson(t.columns, t.rows);
+    updateTab(tabId, { status: "exporting…" });
     try {
-      await invoke("write_file", { path, contents });
-      updateTab(tabId, { status: `exported ${t.rows.length.toLocaleString()} rows → ${path.split("/").pop()}` });
+      const n = await invoke<number>("export_query", {
+        connId,
+        tabId,
+        sql: t.lastSql,
+        format,
+        path,
+      });
+      updateTab(tabId, {
+        status: `exported ${n.toLocaleString()} rows → ${path.split("/").pop()}`,
+      });
     } catch (e) {
       updateTab(tabId, { error: String(e) });
     }

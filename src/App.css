@@ -1204,6 +1204,16 @@ body.col-resizing {
   border-color: var(--green);
 }
 
+.ssl-select {
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11.5px;
+  outline: none;
+}
+
 .form-row {
   display: flex;
   gap: 9px;

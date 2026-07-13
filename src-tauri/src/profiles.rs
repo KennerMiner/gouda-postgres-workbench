@@ -59,6 +59,13 @@ pub struct Profile {
     /// Open sessions read-only (default_transaction_read_only = on).
     #[serde(default)]
     pub read_only: bool,
+    /// "disable" | "require" | "verify-full".
+    #[serde(default = "default_ssl_mode")]
+    pub ssl_mode: String,
+}
+
+fn default_ssl_mode() -> String {
+    "disable".into()
 }
 
 fn default_ssh_port() -> u16 {
@@ -101,7 +108,11 @@ async fn prepare(
         .host(&host)
         .port(port)
         .dbname(&profile.dbname)
-        .user(&profile.username);
+        .user(&profile.username)
+        .ssl_mode(match crate::db::SslChoice::parse(&profile.ssl_mode) {
+            crate::db::SslChoice::Disable => tokio_postgres::config::SslMode::Disable,
+            _ => tokio_postgres::config::SslMode::Require,
+        });
     if let Some(pw) = password {
         config.password(&pw);
     }
@@ -114,7 +125,8 @@ pub fn profiles_list(store: State<'_, Store>) -> Result<Vec<Profile>, String> {
     let mut stmt = conn
         .prepare(
             "select id, name, host, port, dbname, username, color, last_used_at,
-                    ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_key_path, read_only
+                    ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_key_path, read_only,
+                    ssl_mode
              from profiles order by last_used_at desc nulls last, name",
         )
         .map_err(|e| e.to_string())?;
@@ -135,6 +147,7 @@ pub fn profiles_list(store: State<'_, Store>) -> Result<Vec<Profile>, String> {
                 ssh_user: r.get(11)?,
                 ssh_key_path: r.get(12)?,
                 read_only: r.get(13)?,
+                ssl_mode: r.get(14)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -158,8 +171,8 @@ pub fn profile_save(
                 "update profiles
                  set name = ?1, host = ?2, port = ?3, dbname = ?4, username = ?5, color = ?6,
                      ssh_enabled = ?7, ssh_host = ?8, ssh_port = ?9, ssh_user = ?10,
-                     ssh_key_path = ?11, read_only = ?12
-                 where id = ?13",
+                     ssh_key_path = ?11, read_only = ?12, ssl_mode = ?13
+                 where id = ?14",
                 rusqlite::params![
                     profile.name,
                     profile.host,
@@ -173,6 +186,7 @@ pub fn profile_save(
                     profile.ssh_user,
                     profile.ssh_key_path,
                     profile.read_only,
+                    profile.ssl_mode,
                     id
                 ],
             )
@@ -183,8 +197,8 @@ pub fn profile_save(
             conn.execute(
                 "insert into profiles (name, host, port, dbname, username, color,
                                        ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_key_path,
-                                       read_only)
-                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                                       read_only, ssl_mode)
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 rusqlite::params![
                     profile.name,
                     profile.host,
@@ -197,7 +211,8 @@ pub fn profile_save(
                     profile.ssh_port,
                     profile.ssh_user,
                     profile.ssh_key_path,
-                    profile.read_only
+                    profile.read_only,
+                    profile.ssl_mode
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -233,22 +248,22 @@ pub async fn test_connection(profile: Profile, password: Option<String>) -> Resu
     };
 
     // _tunnel must outlive the client so the bridge stays up for the handshake.
+    let ssl = crate::db::SslChoice::parse(&profile.ssl_mode);
     let (mut config, _tunnel) = prepare(&profile, pw).await?;
     config.connect_timeout(std::time::Duration::from_secs(5));
 
-    let (client, connection) = config
-        .connect(tokio_postgres::NoTls)
-        .await
-        .map_err(|e| crate::db::pg_err(&e))?;
-    let handle = tokio::spawn(connection);
+    let client = crate::db::pg_connect(&config, ssl).await?;
     let row = client
         .query_one("select current_setting('server_version')", &[])
         .await
         .map_err(|e| crate::db::pg_err(&e))?;
     let version: String = row.get(0);
-    drop(client);
-    let _ = handle.await;
-    let via = if profile.ssh_enabled { " (via SSH)" } else { "" };
+    let via = match (profile.ssh_enabled, ssl != crate::db::SslChoice::Disable) {
+        (true, true) => " (via SSH, TLS)",
+        (true, false) => " (via SSH)",
+        (false, true) => " (TLS)",
+        (false, false) => "",
+    };
     Ok(format!("PostgreSQL {version}{via}"))
 }
 
@@ -280,6 +295,7 @@ pub(crate) fn load_profile_with_password(
                     ssh_user: r.get(11)?,
                     ssh_key_path: r.get(12)?,
                     read_only: r.get(13)?,
+                    ssl_mode: r.get(14)?,
                 })
             },
         )
@@ -299,8 +315,9 @@ pub async fn connect_profile(
 ) -> Result<ConnInfo, String> {
     let (profile, password) = load_profile_with_password(&store, profile_id)?;
 
+    let ssl = crate::db::SslChoice::parse(&profile.ssl_mode);
     let (config, tunnel) = prepare(&profile, password).await?;
-    let info = crate::db::open_config(&connections, config, tunnel).await?;
+    let info = crate::db::open_config(&connections, config, tunnel, ssl).await?;
 
     if profile.read_only {
         let entry = connections.entry(info.conn_id).await?;

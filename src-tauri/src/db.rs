@@ -26,12 +26,80 @@ const BATCH: usize = 500;
 /// 10M-row table eating all memory. The frontend flags truncation.
 const MAX_ROWS_DEFAULT: usize = 50_000;
 
+/// TLS posture for a connection. `Require` encrypts without certificate
+/// verification (the pragmatic default for RDS/Supabase-style endpoints,
+/// matching what most GUI clients do); `VerifyFull` validates against the
+/// system trust store.
+#[derive(Clone, Copy, PartialEq)]
+pub enum SslChoice {
+    Disable,
+    Require,
+    VerifyFull,
+}
+
+impl SslChoice {
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "require" => Self::Require,
+            "verify-full" => Self::VerifyFull,
+            _ => Self::Disable,
+        }
+    }
+}
+
+fn make_tls(ssl: SslChoice) -> Result<Option<postgres_native_tls::MakeTlsConnector>, String> {
+    let connector = match ssl {
+        SslChoice::Disable => return Ok(None),
+        SslChoice::Require => native_tls::TlsConnector::builder()
+            .danger_accept_invalid_certs(true)
+            .danger_accept_invalid_hostnames(true)
+            .build(),
+        SslChoice::VerifyFull => native_tls::TlsConnector::builder().build(),
+    }
+    .map_err(|e| format!("tls: {e}"))?;
+    Ok(Some(postgres_native_tls::MakeTlsConnector::new(connector)))
+}
+
+/// Connect honoring the TLS choice, driving the connection on its own task.
+pub(crate) async fn pg_connect(
+    config: &tokio_postgres::Config,
+    ssl: SslChoice,
+) -> Result<Client, String> {
+    match make_tls(ssl)? {
+        None => {
+            let (client, connection) = config
+                .connect(NoTls)
+                .await
+                .map_err(|e| format!("connect: {}", pg_err(&e)))?;
+            tokio::spawn(async move {
+                if let Err(e) = connection.await {
+                    eprintln!("postgres connection error: {e}");
+                }
+            });
+            Ok(client)
+        }
+        Some(tls) => {
+            let (client, connection) = config
+                .connect(tls)
+                .await
+                .map_err(|e| format!("connect (tls): {}", pg_err(&e)))?;
+            tokio::spawn(async move {
+                if let Err(e) = connection.await {
+                    eprintln!("postgres connection error: {e}");
+                }
+            });
+            Ok(client)
+        }
+    }
+}
+
 /// A connection: a base client for metadata plus lazily-created per-tab
 /// sessions (queries in different tabs run concurrently; transactions are
 /// per-tab). Sessions share the stored config — and therefore the SSH tunnel,
 /// whose local listener accepts any number of TCP connections.
 pub struct ConnEntry {
     config: tokio_postgres::Config,
+    ssl: SslChoice,
     base: Client,
     label: String,
     read_only: std::sync::atomic::AtomicBool,
@@ -56,16 +124,7 @@ impl ConnEntry {
     }
 
     async fn spawn_session(&self) -> Result<Client, String> {
-        let (client, connection) = self
-            .config
-            .connect(NoTls)
-            .await
-            .map_err(|e| format!("session connect: {}", pg_err(&e)))?;
-        tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("postgres session error: {e}");
-            }
-        });
+        let client = pg_connect(&self.config, self.ssl).await?;
         if self.read_only.load(std::sync::atomic::Ordering::Relaxed) {
             client
                 .batch_execute("set default_transaction_read_only = on")
@@ -297,22 +356,12 @@ pub async fn open_config(
     state: &Connections,
     mut config: tokio_postgres::Config,
     tunnel: Option<crate::tunnel::Tunnel>,
+    ssl: SslChoice,
 ) -> Result<ConnInfo, String> {
     if config.get_connect_timeout().is_none() {
         config.connect_timeout(std::time::Duration::from_secs(10));
     }
-    let (client, connection) = config
-        .connect(NoTls)
-        .await
-        .map_err(|e| format!("connect: {}", pg_err(&e)))?;
-
-    // The connection object drives the socket; it must be polled on its own
-    // task for the client handle to make progress.
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            eprintln!("postgres connection error: {e}");
-        }
-    });
+    let client = pg_connect(&config, ssl).await?;
 
     let row = client
         .query_one(
@@ -332,6 +381,7 @@ pub async fn open_config(
         conn_id,
         Arc::new(ConnEntry {
             config,
+            ssl,
             base: client,
             label,
             read_only: std::sync::atomic::AtomicBool::new(false),
@@ -353,7 +403,11 @@ pub async fn connect(state: State<'_, Connections>, dsn: String) -> Result<ConnI
     let config = dsn
         .parse::<tokio_postgres::Config>()
         .map_err(|e| format!("dsn: {e}"))?;
-    open_config(&state, config, None).await
+    let ssl = match config.get_ssl_mode() {
+        tokio_postgres::config::SslMode::Disable => SslChoice::Disable,
+        _ => SslChoice::Require,
+    };
+    open_config(&state, config, None, ssl).await
 }
 
 /// Cancel whatever is currently running on this connection. Postgres cancel
@@ -370,10 +424,11 @@ pub async fn cancel_query(
         Some(c) => c.cancel_token(),
         None => entry.base.cancel_token(),
     };
-    token
-        .cancel_query(NoTls)
-        .await
-        .map_err(|e| format!("cancel: {e}"))
+    match make_tls(entry.ssl)? {
+        None => token.cancel_query(NoTls).await,
+        Some(tls) => token.cancel_query(tls).await,
+    }
+    .map_err(|e| format!("cancel: {e}"))
 }
 
 #[tauri::command]
@@ -626,6 +681,97 @@ pub async fn table_structure(
     result
 }
 
+fn csv_field(s: &str) -> String {
+    if s.contains(['"', ',', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+fn csv_text(v: &J) -> String {
+    match v {
+        J::Null => String::new(),
+        J::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Stream a query straight to a file — no row cap, rows never accumulate in
+/// memory. CSV gets a header; JSON is a proper array of objects.
+async fn export_to_file(
+    client: &Client,
+    sql: &str,
+    format: &str,
+    path: &str,
+) -> Result<u64, String> {
+    use std::io::Write;
+
+    let stmt = client.prepare(sql).await.map_err(|e| pg_err(&e))?;
+    let names: Vec<String> = stmt.columns().iter().map(|c| c.name().to_string()).collect();
+    let ncols = names.len();
+    let params = std::iter::empty::<&(dyn ToSql + Sync)>();
+    let stream = client.query_raw(&stmt, params).await.map_err(|e| pg_err(&e))?;
+    pin_mut!(stream);
+
+    let file = std::fs::File::create(path).map_err(|e| format!("create {path}: {e}"))?;
+    let mut w = std::io::BufWriter::new(file);
+    let json = format == "json";
+    let mut count: u64 = 0;
+
+    if json {
+        w.write_all(b"[").map_err(|e| e.to_string())?;
+    } else {
+        let header: Vec<String> = names.iter().map(|n| csv_field(n)).collect();
+        w.write_all(header.join(",").as_bytes())
+            .and_then(|_| w.write_all(b"\r\n"))
+            .map_err(|e| e.to_string())?;
+    }
+
+    while let Some(item) = stream.next().await {
+        let row = item.map_err(|e| pg_err(&e))?;
+        if json {
+            let mut obj = serde_json::Map::with_capacity(ncols);
+            for i in 0..ncols {
+                obj.insert(names[i].clone(), cell(&row, i));
+            }
+            w.write_all(if count == 0 { b"\n" } else { b",\n" })
+                .map_err(|e| e.to_string())?;
+            serde_json::to_writer(&mut w, &J::Object(obj)).map_err(|e| e.to_string())?;
+        } else {
+            let line: Vec<String> = (0..ncols).map(|i| csv_field(&csv_text(&cell(&row, i)))).collect();
+            w.write_all(line.join(",").as_bytes())
+                .and_then(|_| w.write_all(b"\r\n"))
+                .map_err(|e| e.to_string())?;
+        }
+        count += 1;
+    }
+    if json {
+        w.write_all(b"\n]\n").map_err(|e| e.to_string())?;
+    }
+    w.flush().map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
+/// Export a query's FULL result set to a file (bypasses the 50k UI cap).
+#[tauri::command]
+pub async fn export_query(
+    state: State<'_, Connections>,
+    conn_id: u32,
+    tab_id: u32,
+    sql: String,
+    format: String,
+    path: String,
+) -> Result<u64, String> {
+    let entry = state.get(conn_id).await?;
+    let session = entry.session(tab_id).await?;
+    let res = export_to_file(&session, &sql, &format, &path).await;
+    if res.is_err() && session.is_closed() {
+        entry.drop_session(tab_id).await;
+    }
+    res
+}
+
 /// Fire-and-forget statement on a TAB's session — transaction control
 /// (begin/commit/rollback) is per-tab by design.
 #[tauri::command]
@@ -796,8 +942,16 @@ pub async fn run_query(
                 // Stop the server-side work too; the connection survives a
                 // cancel and drains quickly.
                 let token = client.cancel_token();
+                let ssl = entry.ssl;
                 tokio::spawn(async move {
-                    let _ = token.cancel_query(NoTls).await;
+                    match make_tls(ssl) {
+                        Ok(Some(tls)) => {
+                            let _ = token.cancel_query(tls).await;
+                        }
+                        _ => {
+                            let _ = token.cancel_query(NoTls).await;
+                        }
+                    }
                 });
                 break;
             }
@@ -1034,6 +1188,47 @@ mod tests {
         // Table without a PK -> read-only.
         let stmt = client.prepare("select v from nopk_t").await.unwrap();
         assert!(detect_editable(&client, &stmt).await.is_none());
+    }
+
+    /// Export streams far past the 50k UI cap and produces well-formed output.
+    #[tokio::test]
+    async fn export_streams_past_cap() {
+        let client = test_client().await;
+        let dir = std::env::temp_dir().join(format!("psqlv-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let csv = dir.join("big.csv");
+        let n = export_to_file(
+            &client,
+            "select g as id, 'name-' || g as name from generate_series(1, 100000) g",
+            "csv",
+            csv.to_str().unwrap(),
+        )
+        .await
+        .expect("csv export");
+        assert_eq!(n, 100_000);
+        let text = std::fs::read_to_string(&csv).unwrap();
+        assert!(text.starts_with("id,name\r\n1,name-1\r\n"));
+        assert_eq!(text.lines().count(), 100_001); // header + rows
+
+        let json = dir.join("small.json");
+        let n = export_to_file(
+            &client,
+            r#"select 1 as a, 'x,"y"' as b, null::text as c, '{"k":1}'::jsonb as j"#,
+            "json",
+            json.to_str().unwrap(),
+        )
+        .await
+        .expect("json export");
+        assert_eq!(n, 1);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&json).unwrap()).unwrap();
+        assert_eq!(parsed[0]["a"], 1);
+        assert_eq!(parsed[0]["b"], "x,\"y\"");
+        assert_eq!(parsed[0]["c"], serde_json::Value::Null);
+        assert_eq!(parsed[0]["j"]["k"], 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The sidebar query must return public-schema tables from the dev DB and
