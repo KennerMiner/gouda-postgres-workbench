@@ -32,6 +32,7 @@ pub fn run() {
             db::disconnect,
             db::list_objects,
             db::schema_catalog,
+            db::table_structure,
             db::run_query,
             db::exec_simple,
             db::explain_query,

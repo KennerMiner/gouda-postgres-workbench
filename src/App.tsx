@@ -6,6 +6,7 @@ import ConnectionModal, { type Profile } from "./ConnectionModal";
 import Palette, { type PaletteItem } from "./Palette";
 import AiContextModal from "./AiContextModal";
 import PlanView, { type PlanRoot } from "./PlanView";
+import StructureView, { type TableStructure } from "./StructureView";
 import { splitStatements } from "./sqlStatements";
 import { buildNamespace, type CatalogTable } from "./sqlNamespace";
 import { toCsv, toJson } from "./export";
@@ -47,6 +48,7 @@ type QueryTab = {
   error: string;
   running: boolean;
   plan: PlanRoot[] | null;
+  structure: TableStructure | null;
 };
 
 const DEFAULT_SQL =
@@ -110,6 +112,7 @@ function blankTab(id: number, sql = ""): QueryTab {
     error: "",
     running: false,
     plan: null,
+    structure: null,
   };
 }
 
@@ -319,6 +322,7 @@ function App() {
                 error: "",
                 running: true,
                 plan: null,
+                structure: null,
               }
             : t,
         ),
@@ -661,6 +665,26 @@ function App() {
       else next.add(key);
       return next;
     });
+
+  /** Load and show the Structure view for the tab's source table. */
+  const showStructure = useCallback(
+    async (tabId: number) => {
+      const t = tabsRef.current.find((x) => x.id === tabId);
+      const connId = connRef.current?.connId;
+      if (!t?.editable || !connId) return;
+      try {
+        const structure = await invoke<TableStructure>("table_structure", {
+          connId,
+          schema: t.editable.schema,
+          table: t.editable.table,
+        });
+        updateTab(tabId, { structure });
+      } catch (e) {
+        updateTab(tabId, { error: String(e) });
+      }
+    },
+    [updateTab],
+  );
 
   /** Export a tab's result set through the native save dialog. */
   const exportTab = useCallback(async (tabId: number, format: "csv" | "json") => {
@@ -1317,6 +1341,12 @@ function App() {
             >
               {t.error ? (
                 <div className="error-pane">{t.error}</div>
+              ) : t.structure && t.editable ? (
+                <StructureView
+                  table={`${t.editable.schema}.${t.editable.table}`}
+                  structure={t.structure}
+                  onBackToData={() => updateTab(t.id, { structure: null })}
+                />
               ) : t.plan ? (
                 <PlanView roots={t.plan} />
               ) : (
@@ -1338,6 +1368,7 @@ function App() {
                       if (t.lastSql) runSql(t.lastSql, t.id);
                     }}
                     onExport={(format) => exportTab(t.id, format)}
+                    onStructure={() => showStructure(t.id)}
                   />
                 )
               )}

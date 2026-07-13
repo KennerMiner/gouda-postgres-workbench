@@ -84,6 +84,9 @@ Personal daily driver, macOS-first.
       status; auto-reconnect-and-retry on dead connections (laptop sleep);
       confirm on UPDATE/DELETE-without-WHERE and TRUNCATE/DROP; column
       header sort (source-index-safe with staged edits) + drag resize
+- [x] Structure view (columns/defaults/nullability, indexes w/ PK+unique
+      badges, constraints w/ definitions) via grid-toolbar toggle
+- [x] Row selection (gutter click/shift/⌘) → copy TSV or multi-row INSERT
 - [x] Session persistence: tabs restore across launches (app_state KV)
 - [x] Saved queries: snippets + sidebar Queries tab + palette flows
 - [x] Ask AI (⌘K): claude CLI generates a commented query into a new tab —

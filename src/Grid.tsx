@@ -3,6 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import Inspector from "./Inspector";
 import { copyText } from "./clipboard";
 import { applyJsonSets, type JsonSetStage } from "./jsonSets";
+import { rowsToInsert, rowsToTsv } from "./rowCopy";
 import type { Path } from "./JsonTree";
 
 export type ColumnMeta = { name: string; typeName: string; typeOid: number };
@@ -75,9 +76,18 @@ type Props = {
   ) => Promise<string[]>;
   refresh: () => void;
   onExport: (format: "csv" | "json") => void;
+  onStructure: () => void;
 };
 
-export default function Grid({ columns, rows, editable, applyChanges, refresh, onExport }: Props) {
+export default function Grid({
+  columns,
+  rows,
+  editable,
+  applyChanges,
+  refresh,
+  onExport,
+  onStructure,
+}: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [sel, setSel] = useState<Sel | null>(null);
   const [inspecting, setInspecting] = useState(false);
@@ -92,6 +102,9 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh, o
   const [editText, setEditText] = useState("");
   const [preview, setPreview] = useState<string[] | null>(null);
   const [sort, setSort] = useState<{ c: number; dir: 1 | -1 } | null>(null);
+  // Selected SOURCE row indices + the display-index anchor for shift ranges.
+  const [rowSel, setRowSel] = useState<Set<number>>(new Set());
+  const rowAnchor = useRef<number | null>(null);
   const [widthOverrides, setWidthOverrides] = useState<Map<number, number>>(new Map());
   const [applyErr, setApplyErr] = useState("");
   const [applyBusy, setApplyBusy] = useState(false);
@@ -108,6 +121,7 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh, o
     setApplyErr("");
     setSort(null);
     setWidthOverrides(new Map());
+    setRowSel(new Set());
   }, [columns]);
 
   const total = rows.length + inserts.length;
@@ -431,6 +445,45 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh, o
     }
   };
 
+  const gutterClick = (e: React.MouseEvent, d: number) => {
+    if (isInsertRow(toSrc(d))) return;
+    e.preventDefault();
+    setSel(null);
+    setRowSel((prev) => {
+      const next = new Set(prev);
+      const src = toSrc(d);
+      if (e.shiftKey && rowAnchor.current !== null) {
+        const [a, b] = [Math.min(rowAnchor.current, d), Math.max(rowAnchor.current, d)];
+        for (let i = a; i <= b && i < rows.length; i++) next.add(toSrc(i));
+      } else if (e.metaKey || e.ctrlKey) {
+        if (next.has(src)) next.delete(src);
+        else next.add(src);
+        rowAnchor.current = d;
+      } else {
+        next.clear();
+        next.add(src);
+        rowAnchor.current = d;
+      }
+      return next;
+    });
+  };
+
+  /** Selected rows in display order (stable, readable output). */
+  const selectedRowData = () => order.filter((src) => rowSel.has(src)).map((src) => rows[src]);
+
+  const copyRows = (format: "tsv" | "insert") => {
+    const data = selectedRowData();
+    if (!data.length) return;
+    if (format === "tsv") {
+      copyText(rowsToTsv(data));
+    } else {
+      const table = editable
+        ? `"${editable.schema.replace(/"/g, '""')}"."${editable.table.replace(/"/g, '""')}"`
+        : '"table"';
+      copyText(rowsToInsert(table, columns, data));
+    }
+  };
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (total === 0 || editing) return;
     switch (e.key) {
@@ -471,6 +524,7 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh, o
       case "Escape":
         e.preventDefault();
         if (inspecting) setInspecting(false);
+        else if (rowSel.size) setRowSel(new Set());
         else setSel(null);
         break;
       case "Backspace":
@@ -485,7 +539,10 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh, o
         }
         break;
       case "c":
-        if ((e.metaKey || e.ctrlKey) && sel) {
+        if ((e.metaKey || e.ctrlKey) && rowSel.size) {
+          e.preventDefault();
+          copyRows("tsv");
+        } else if ((e.metaKey || e.ctrlKey) && sel) {
           e.preventDefault();
           copyText(cellText(displayValue(toSrc(sel.r), sel.c) ?? null));
         }
@@ -582,13 +639,21 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh, o
               return (
                 <div
                   key={vr.key}
-                  className={`grid-row${insert ? " insert" : ""}${deleted ? " deleted" : ""}`}
+                  className={`grid-row${insert ? " insert" : ""}${deleted ? " deleted" : ""}${
+                    !insert && rowSel.has(src) ? " rowsel" : ""
+                  }`}
                   style={{
                     gridTemplateColumns: template,
                     transform: `translateY(${vr.start}px)`,
                   }}
                 >
-                  <div className="gc gutter">{insert ? "+" : d + 1}</div>
+                  <div
+                    className="gc gutter"
+                    onMouseDown={(e) => gutterClick(e, d)}
+                    title={insert ? "" : "click selects row · shift extends · ⌘ toggles"}
+                  >
+                    {insert ? "+" : d + 1}
+                  </div>
                   {columns.map((_, ci) => (
                     <div
                       key={ci}
@@ -642,7 +707,23 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh, o
             </span>
           </>
         )}
+        {rowSel.size > 0 && (
+          <>
+            <span className="edits-count">{rowSel.size} row{rowSel.size === 1 ? "" : "s"}</span>
+            <button className="btn mini" onClick={() => copyRows("tsv")}>
+              Copy TSV
+            </button>
+            <button className="btn mini" onClick={() => copyRows("insert")}>
+              Copy INSERT
+            </button>
+          </>
+        )}
         <span className="spacer" />
+        {editable && (
+          <button className="btn mini" onClick={onStructure}>
+            Structure
+          </button>
+        )}
         {rows.length > 0 && (
           <>
             <button className="btn mini" onClick={() => onExport("csv")}>

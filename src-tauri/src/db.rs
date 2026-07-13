@@ -432,6 +432,129 @@ pub async fn schema_catalog(
     Ok(tables)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StructColumn {
+    name: String,
+    data_type: String,
+    nullable: bool,
+    default_expr: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StructIndex {
+    name: String,
+    definition: String,
+    primary: bool,
+    unique: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StructConstraint {
+    name: String,
+    kind: String,
+    definition: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableStructure {
+    columns: Vec<StructColumn>,
+    indexes: Vec<StructIndex>,
+    constraints: Vec<StructConstraint>,
+}
+
+/// Structure tab data: columns with defaults, indexes, constraints.
+#[tauri::command]
+pub async fn table_structure(
+    state: State<'_, Connections>,
+    conn_id: u32,
+    schema: String,
+    table: String,
+) -> Result<TableStructure, String> {
+    let entry = state.get(conn_id).await?;
+    let client = &entry.client;
+    let run = async {
+        let cols = client
+            .query(
+                r#"select a.attname,
+                          format_type(a.atttypid, a.atttypmod),
+                          not a.attnotnull,
+                          pg_get_expr(d.adbin, d.adrelid)
+                   from pg_attribute a
+                   left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+                   where a.attrelid = to_regclass(quote_ident($1) || '.' || quote_ident($2))
+                     and a.attnum > 0 and not a.attisdropped
+                   order by a.attnum"#,
+                &[&schema, &table],
+            )
+            .await
+            .map_err(|e| pg_err(&e))?;
+        let indexes = client
+            .query(
+                r#"select ci.relname, pg_get_indexdef(i.indexrelid), i.indisprimary, i.indisunique
+                   from pg_index i join pg_class ci on ci.oid = i.indexrelid
+                   where i.indrelid = to_regclass(quote_ident($1) || '.' || quote_ident($2))
+                   order by i.indisprimary desc, ci.relname"#,
+                &[&schema, &table],
+            )
+            .await
+            .map_err(|e| pg_err(&e))?;
+        let cons = client
+            .query(
+                r#"select conname, contype::text, pg_get_constraintdef(oid)
+                   from pg_constraint
+                   where conrelid = to_regclass(quote_ident($1) || '.' || quote_ident($2))
+                   order by contype, conname"#,
+                &[&schema, &table],
+            )
+            .await
+            .map_err(|e| pg_err(&e))?;
+        Ok(TableStructure {
+            columns: cols
+                .iter()
+                .map(|r| StructColumn {
+                    name: r.get(0),
+                    data_type: r.get(1),
+                    nullable: r.get(2),
+                    default_expr: r.get(3),
+                })
+                .collect(),
+            indexes: indexes
+                .iter()
+                .map(|r| StructIndex {
+                    name: r.get(0),
+                    definition: r.get(1),
+                    primary: r.get(2),
+                    unique: r.get(3),
+                })
+                .collect(),
+            constraints: cons
+                .iter()
+                .map(|r| StructConstraint {
+                    name: r.get(0),
+                    kind: match r.get::<_, String>(1).as_str() {
+                        "p" => "primary key".into(),
+                        "f" => "foreign key".into(),
+                        "u" => "unique".into(),
+                        "c" => "check".into(),
+                        "x" => "exclusion".into(),
+                        other => other.to_string(),
+                    },
+                    definition: r.get(2),
+                })
+                .collect(),
+        })
+    };
+    let result: Result<TableStructure, String> = run.await;
+    if result.is_err() {
+        state.drop_if_closed(conn_id, client).await;
+    }
+    result
+}
+
 /// Fire-and-forget statement with no result plumbing — used for session
 /// control (begin/commit/rollback, SET …).
 #[tauri::command]
