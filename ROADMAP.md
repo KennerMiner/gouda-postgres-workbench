@@ -31,7 +31,9 @@ Personal daily driver, macOS-first.
 - [x] Live connection banner (server version, user, host, db)
 - [x] Connection manager: profiles in SQLite, passwords in macOS Keychain,
       manager modal, per-profile banner colors, auto-connect most recent,
-      'heroage local' seeded on first run (SSL modes still TODO)
+      'heroage local' seeded on first run
+- [x] SSL modes: disable / require (encrypted, no verify) / verify-full
+      (system trust store) — sessions, cancel tokens, test included
 - [x] SSH tunnel support (russh): agent + key-file auth, known_hosts
       verification, tunnel lifetime tied to connection; per-profile SSH
       section in the manager; end-to-end test against the dev bastion
@@ -54,8 +56,9 @@ Personal daily driver, macOS-first.
       (functions/types still TODO)
 - [x] Persistent searchable query history (SQLite in app-data dir, last 5000,
       Items/History sidebar tabs, click loads into editor)
-- [x] Export: CSV / JSON via native save dialog, from grid toolbar or
-      palette (SQL-inserts + COPY TO for huge sets still TODO)
+- [x] Export: CSV / JSON via native save dialog — streamed server→file
+      with no row cap (integration-tested at 100k rows); INSERT via
+      row-selection copy
 
 ### M2 — Better than Beekeeper
 - [x] Schema-aware autocomplete: schema_catalog command (tables/views +
