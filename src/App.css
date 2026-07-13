@@ -524,6 +524,23 @@ body.row-resizing {
   white-space: pre-wrap;
 }
 
+.notice-pane {
+  margin: 0;
+  padding: 14px 16px;
+  color: var(--text);
+  font: 12px/1.6 var(--mono);
+  white-space: pre-wrap;
+  overflow: auto;
+}
+
+.server-head {
+  margin-top: 4px;
+}
+
+.obj-icon.server {
+  color: var(--text-dim);
+}
+
 .results {
   display: flex;
   flex-direction: column;

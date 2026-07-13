@@ -10,6 +10,7 @@ import StructureView, { type TableStructure } from "./StructureView";
 import { splitStatements } from "./sqlStatements";
 import { buildNamespace, type CatalogTable } from "./sqlNamespace";
 import { toCsv, toJson } from "./export";
+import { META_HELP, SERVER_QUERIES, translateMeta } from "./metaCommands";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { SQLNamespace } from "@codemirror/lang-sql";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -50,6 +51,8 @@ type QueryTab = {
   running: boolean;
   plan: PlanRoot[] | null;
   structure: TableStructure | null;
+  structureTitle: string;
+  notice: string;
   tx: "none" | "open" | "aborted";
 };
 
@@ -119,6 +122,8 @@ function blankTab(id: number, sql = ""): QueryTab {
     running: false,
     plan: null,
     structure: null,
+    structureTitle: "",
+    notice: "",
     tx: "none",
   };
 }
@@ -130,6 +135,7 @@ function App() {
   const [showConnections, setShowConnections] = useState(false);
   const [connError, setConnError] = useState("");
   const [objects, setObjects] = useState<DbObject[]>([]);
+  const objectsRef = useRef<DbObject[]>([]);
   const [schemaNs, setSchemaNs] = useState<SQLNamespace | null>(null);
   const [catalog, setCatalog] = useState<CatalogTable[]>([]);
   const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set());
@@ -179,7 +185,9 @@ function App() {
       setTabs((ts) => ts.map((t) => ({ ...t, tx: "none" })));
       setReadOnly(p.readOnly);
       setShowConnections(false);
-      setObjects(await invoke<DbObject[]>("list_objects", { connId: info.connId }));
+      const objs = await invoke<DbObject[]>("list_objects", { connId: info.connId });
+      setObjects(objs);
+      objectsRef.current = objs;
       // Autocomplete dictionary loads after the sidebar; failures are non-fatal.
       try {
         const catalog = await invoke<CatalogTable[]>("schema_catalog", { connId: info.connId });
@@ -309,6 +317,46 @@ function App() {
       const connId = opts?.connId ?? connRef.current?.connId;
       if (!connId) return Promise.resolve(false);
       const id = tabId ?? activeTabIdRef.current;
+
+      // psql-style backslash commands are client-side macros — translate.
+      const meta = translateMeta(text);
+      if (meta) {
+        if (meta.kind === "sql") {
+          updateTab(id, { title: meta.title, customTitle: true });
+          return runSqlRef.current!(meta.sql, id, opts);
+        }
+        if (meta.kind === "describe") {
+          describeRef.current?.(meta.name, id);
+          return Promise.resolve(true);
+        }
+        if (meta.kind === "conninfo") {
+          const c = connRef.current;
+          const prof = activeProfileRef.current;
+          updateTab(id, {
+            notice: c
+              ? `connected to ${c.database} as ${c.user}\nserver: PostgreSQL ${c.serverVersion} @ ${prof?.host ?? "?"}${prof?.sshEnabled ? " (via SSH tunnel)" : ""}\nprofile: ${prof?.name ?? "?"}${readOnlyRef.current ? "\nsession is read-only" : ""}`
+              : "not connected",
+            columns: [],
+            rows: [],
+            plan: null,
+            structure: null,
+            error: "",
+            status: "",
+          });
+          return Promise.resolve(true);
+        }
+        updateTab(id, {
+          notice: (meta.unknown ? `unrecognized command: ${meta.unknown}\n\n` : "") + META_HELP,
+          columns: [],
+          rows: [],
+          plan: null,
+          structure: null,
+          error: "",
+          status: "",
+        });
+        return Promise.resolve(true);
+      }
+
       const warning = confirmDangerous(text);
       if (warning && !window.confirm(warning)) {
         updateTab(id, { status: "cancelled" });
@@ -330,6 +378,8 @@ function App() {
                 running: true,
                 plan: null,
                 structure: null,
+                structureTitle: "",
+                notice: "",
               }
             : t,
         ),
@@ -406,6 +456,52 @@ function App() {
     },
     [connectProfile, updateTab],
   );
+  const runSqlRef = useRef(runSql);
+  runSqlRef.current = runSql;
+
+  /** \d <name>: resolve schema (catalog lookup for bare names) and show structure. */
+  const describeTable = useCallback(
+    async (name: string, tabId: number) => {
+      const connId = connRef.current?.connId;
+      if (!connId) return;
+      let schema = "public";
+      let table = name;
+      if (name.includes(".")) {
+        [schema, table] = name.split(".");
+      } else {
+        const hit = objectsRef.current.find((o) => o.name === name);
+        if (hit) schema = hit.schema;
+      }
+      try {
+        const structure = await invoke<TableStructure>("table_structure", {
+          connId,
+          schema,
+          table,
+        });
+        if (!structure.columns.length) {
+          updateTab(tabId, { notice: `no table found: ${schema}.${table}`, error: "" });
+          return;
+        }
+        updateTab(tabId, {
+          structure,
+          structureTitle: `${schema}.${table}`,
+          title: table,
+          customTitle: true,
+          columns: [],
+          rows: [],
+          plan: null,
+          notice: "",
+          error: "",
+          status: "",
+        });
+      } catch (e) {
+        updateTab(tabId, { error: String(e) });
+      }
+    },
+    [updateTab],
+  );
+  const describeRef = useRef(describeTable);
+  describeRef.current = describeTable;
 
   /** Run a whole script: statements sequentially, stopping at the first failure. */
   const runScript = useCallback(
@@ -489,6 +585,8 @@ function App() {
   }, []);
 
   const [readOnly, setReadOnly] = useState(false);
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
   const [snippets, setSnippets] = useState<Snippet[]>([]);
   const [showPalette, setShowPalette] = useState(false);
   const [aiCtx, setAiCtx] = useState<{ phase: "exploring" | "ready"; text: string; error: string } | null>(null);
@@ -690,7 +788,10 @@ function App() {
           schema: t.editable.schema,
           table: t.editable.table,
         });
-        updateTab(tabId, { structure });
+        updateTab(tabId, {
+          structure,
+          structureTitle: `${t.editable.schema}.${t.editable.table}`,
+        });
       } catch (e) {
         updateTab(tabId, { error: String(e) });
       }
@@ -1151,6 +1252,23 @@ function App() {
               />
               <div className="tree">
                 {connError && <div className="tree-error">{connError}</div>}
+                <div className="schema-row server-head">Server</div>
+                {SERVER_QUERIES.map((q) => (
+                  <div
+                    key={q.key}
+                    className="item-row"
+                    onClick={() => {
+                      const id = activeTabIdRef.current;
+                      updateTab(id, { title: q.title, customTitle: true });
+                      runSql(q.sql, id);
+                    }}
+                    title={q.title}
+                  >
+                    <span className="obj-icon server">⚙</span>
+                    {q.label}
+                  </div>
+                ))}
+                <div className="schema-row server-head">Schemas</div>
                 {schemas.map(([schema, items]) => (
                   <div key={schema}>
                     <div className="schema-row" onClick={() => toggleSchema(schema)}>
@@ -1361,9 +1479,11 @@ function App() {
             >
               {t.error ? (
                 <div className="error-pane">{t.error}</div>
-              ) : t.structure && t.editable ? (
+              ) : t.notice ? (
+                <pre className="notice-pane">{t.notice}</pre>
+              ) : t.structure ? (
                 <StructureView
-                  table={`${t.editable.schema}.${t.editable.table}`}
+                  table={t.structureTitle}
                   structure={t.structure}
                   onBackToData={() => updateTab(t.id, { structure: null })}
                 />
