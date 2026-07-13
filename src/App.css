@@ -1438,6 +1438,65 @@ body.row-resizing {
   font-size: 11.5px;
 }
 
+/* --- AI context modal --------------------------------------------------------- */
+
+.ai-ctx-modal {
+  display: flex;
+  flex-direction: column;
+  width: 680px;
+  max-width: calc(100vw - 60px);
+  height: 540px;
+  max-height: calc(100vh - 60px);
+  padding: 14px 16px;
+  gap: 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+}
+
+.ai-ctx-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ai-ctx-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ai-ctx-sub {
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+.ai-ctx-exploring {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.ai-ctx-text {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: 11.5px/1.6 var(--mono);
+  resize: none;
+  outline: none;
+}
+
+.ai-ctx-text:focus {
+  border-color: var(--green);
+}
+
 /* --- tx + lock -------------------------------------------------------------- */
 
 .btn.lock.on {

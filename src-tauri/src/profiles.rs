@@ -252,6 +252,43 @@ pub async fn test_connection(profile: Profile, password: Option<String>) -> Resu
     Ok(format!("PostgreSQL {version}{via}"))
 }
 
+/// Load a profile row + its Keychain secret. Shared by connect and AI explore.
+pub(crate) fn load_profile_with_password(
+    store: &Store,
+    profile_id: i64,
+) -> Result<(Profile, Option<String>), String> {
+    let profile = {
+        let conn = store.0.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "select id, name, host, port, dbname, username, color, last_used_at,
+                    ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_key_path, read_only
+             from profiles where id = ?1",
+            [profile_id],
+            |r| {
+                Ok(Profile {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    host: r.get(2)?,
+                    port: r.get(3)?,
+                    dbname: r.get(4)?,
+                    username: r.get(5)?,
+                    color: r.get(6)?,
+                    last_used_at: r.get(7)?,
+                    ssh_enabled: r.get(8)?,
+                    ssh_host: r.get(9)?,
+                    ssh_port: r.get(10)?,
+                    ssh_user: r.get(11)?,
+                    ssh_key_path: r.get(12)?,
+                    read_only: r.get(13)?,
+                })
+            },
+        )
+        .map_err(|e| format!("profile: {e}"))?
+    };
+    let password = get_password(profile_id)?;
+    Ok((profile, password))
+}
+
 /// Connect using a saved profile. The password is resolved from the Keychain
 /// in Rust — it never transits the frontend.
 #[tauri::command]
@@ -260,37 +297,7 @@ pub async fn connect_profile(
     store: State<'_, Store>,
     profile_id: i64,
 ) -> Result<ConnInfo, String> {
-    // Read the profile + secret before any await so the sync locks are short.
-    let (profile, password) = {
-        let conn = store.0.lock().map_err(|e| e.to_string())?;
-        let profile = conn
-            .query_row(
-                "select id, name, host, port, dbname, username, color, last_used_at,
-                        ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_key_path, read_only
-                 from profiles where id = ?1",
-                [profile_id],
-                |r| {
-                    Ok(Profile {
-                        id: r.get(0)?,
-                        name: r.get(1)?,
-                        host: r.get(2)?,
-                        port: r.get(3)?,
-                        dbname: r.get(4)?,
-                        username: r.get(5)?,
-                        color: r.get(6)?,
-                        last_used_at: r.get(7)?,
-                        ssh_enabled: r.get(8)?,
-                        ssh_host: r.get(9)?,
-                        ssh_port: r.get(10)?,
-                        ssh_user: r.get(11)?,
-                        ssh_key_path: r.get(12)?,
-                        read_only: r.get(13)?,
-                    })
-                },
-            )
-            .map_err(|e| format!("profile: {e}"))?;
-        (profile, get_password(profile_id)?)
-    };
+    let (profile, password) = load_profile_with_password(&store, profile_id)?;
 
     let (config, tunnel) = prepare(&profile, password).await?;
     let info = crate::db::open_config(&connections, config, tunnel).await?;

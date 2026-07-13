@@ -9,7 +9,7 @@ export type PaletteItem = {
   /** Selecting the item either acts immediately… */
   run?: () => void;
   /** …or switches the palette into a text-prompt (e.g. "name this snippet"). */
-  prompt?: { placeholder: string; submit: (text: string) => void };
+  prompt?: { placeholder: string; submit: (text: string) => void; allowEmpty?: boolean };
 };
 
 type Props = { items: PaletteItem[]; onClose: () => void };
@@ -55,7 +55,7 @@ export default function Palette({ items, onClose }: Props) {
       else onClose();
     } else if (prompt && e.key === "Enter") {
       e.preventDefault();
-      if (query.trim()) {
+      if (query.trim() || prompt.allowEmpty) {
         prompt.submit(query.trim());
         onClose();
       }

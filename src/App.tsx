@@ -4,6 +4,7 @@ import Editor from "./Editor";
 import Grid, { type ChangeSet, type ColumnMeta, type EditableInfo } from "./Grid";
 import ConnectionModal, { type Profile } from "./ConnectionModal";
 import Palette, { type PaletteItem } from "./Palette";
+import AiContextModal from "./AiContextModal";
 import PlanView, { type PlanRoot } from "./PlanView";
 import { splitStatements } from "./sqlStatements";
 import { buildNamespace, type CatalogTable } from "./sqlNamespace";
@@ -421,6 +422,7 @@ function App() {
   const [readOnly, setReadOnly] = useState(false);
   const [snippets, setSnippets] = useState<Snippet[]>([]);
   const [showPalette, setShowPalette] = useState(false);
+  const [aiCtx, setAiCtx] = useState<{ phase: "exploring" | "ready"; text: string; error: string } | null>(null);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
 
@@ -650,68 +652,158 @@ function App() {
       return next;
     });
 
-  /** Ask-AI: generate a commented query into a fresh tab. Never auto-runs. */
-  const aiAsk = useCallback(
-    async (prompt: string) => {
-      // Gather context BEFORE creating the tab (which changes the active tab).
-      const truncCell = (v: unknown) => {
-        if (v === null) return null;
-        const s = typeof v === "object" ? JSON.stringify(v) : String(v);
-        return s.length > 200 ? s.slice(0, 200) + "…" : s;
-      };
-      const schemaLines = catalog
+  /** Shared context assembly for Ask-AI. */
+  const aiSchemaLines = useCallback(
+    () =>
+      catalog
         .map(
           (t) =>
             `${t.schema}.${t.name} (${t.columns.map((c) => `${c.name} ${c.dataType}`).join(", ")})`,
         )
-        .join("\n");
-      const samples: string[] = [];
-      for (const t of tabsRef.current) {
-        if (!t.columns.length || !t.rows.length) continue;
-        const name = t.editable ? `${t.editable.schema}.${t.editable.table}` : t.title;
-        const rows = t.rows
-          .slice(0, 3)
-          .map((r) => Object.fromEntries(t.columns.map((c, i) => [c.name, truncCell(r[i])])));
-        samples.push(`-- ${name}\n${JSON.stringify(rows)}`);
-      }
-      const currentSql = tabsRef.current.find((t) => t.id === activeTabIdRef.current)?.sql ?? "";
-      const context = [
-        "=== SCHEMA (PostgreSQL) ===",
-        schemaLines || "(no schema loaded)",
-        "",
-        "=== SAMPLE ROWS (already fetched in this client) ===",
-        samples.join("\n").slice(0, 8000) || "(none)",
-        "",
-        "=== CURRENT EDITOR SQL ===",
-        currentSql.slice(0, 2000),
-      ].join("\n");
+        .join("\n"),
+    [catalog],
+  );
 
-      const id = addTab(`-- ✦ ${prompt}\n-- generating…`);
-      updateTab(id, { title: prompt.slice(0, 24) || "AI query", customTitle: true, running: true });
-      try {
-        const sql = await invoke<string>("ai_generate_query", { prompt, context });
-        updateTab(id, { sql: `-- ✦ ${prompt}\n${sql}`, running: false });
-      } catch (e) {
-        updateTab(id, {
-          sql: `-- ✦ ${prompt}\n-- generation failed`,
-          error: String(e),
-          running: false,
+  /**
+   * Ask-AI. "new": schema (+ CLAUDE.md via cwd) only, result in a fresh tab.
+   * "current": additionally sends the current tab's SQL and sample rows, and
+   * the result replaces the current tab's content (undoable in the editor).
+   */
+  const aiAsk = useCallback(
+    async (prompt: string, mode: "new" | "current") => {
+      if (!activeProfile?.id) return;
+      const profileId = activeProfile.id;
+      const active = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
+      const truncCell = (v: unknown) => {
+        if (v === null) return null;
+        const str = typeof v === "object" ? JSON.stringify(v) : String(v);
+        return str.length > 200 ? str.slice(0, 200) + "…" : str;
+      };
+
+      const sections = ["=== SCHEMA (PostgreSQL) ===", aiSchemaLines() || "(no schema loaded)"];
+      if (mode === "current" && active) {
+        if (active.columns.length && active.rows.length) {
+          const name = active.editable
+            ? `${active.editable.schema}.${active.editable.table}`
+            : active.title;
+          const rows = active.rows
+            .slice(0, 5)
+            .map((r) =>
+              Object.fromEntries(active.columns.map((c, i) => [c.name, truncCell(r[i])])),
+            );
+          sections.push(
+            "",
+            "=== CURRENT TAB SAMPLE ROWS ===",
+            `-- ${name}\n${JSON.stringify(rows).slice(0, 8000)}`,
+          );
+        }
+        sections.push("", "=== CURRENT TAB SQL (modify/extend this) ===", active.sql.slice(0, 4000));
+      }
+      const context = sections.join("\n");
+
+      let targetId: number;
+      if (mode === "new") {
+        targetId = addTab(`-- ✦ ${prompt}\n-- generating…`);
+        updateTab(targetId, {
+          title: prompt.slice(0, 24) || "AI query",
+          customTitle: true,
+          running: true,
         });
+      } else {
+        targetId = active?.id ?? activeTabIdRef.current;
+        updateTab(targetId, { running: true, error: "" });
+      }
+
+      try {
+        const sql = await invoke<string>("ai_generate_query", { profileId, prompt, context });
+        updateTab(targetId, { sql: `-- ✦ ${prompt}\n${sql}`, running: false });
+      } catch (e) {
+        updateTab(targetId, { error: String(e), running: false });
       }
     },
-    [catalog, addTab, updateTab],
+    [activeProfile, aiSchemaLines, addTab, updateTab],
+  );
+
+  /** Initialize AI context: agentic read-only exploration → CLAUDE.md. */
+  const aiExplore = useCallback(
+    async (guidance: string) => {
+      if (!activeProfile?.id) return;
+      setAiCtx({ phase: "exploring", text: "", error: "" });
+      try {
+        const doc = await invoke<string>("ai_explore_context", {
+          profileId: activeProfile.id,
+          guidance,
+          schema: aiSchemaLines(),
+        });
+        setAiCtx({ phase: "ready", text: doc, error: "" });
+      } catch (e) {
+        const existing = await invoke<string | null>("ai_load_context", {
+          profileId: activeProfile.id,
+        }).catch(() => null);
+        setAiCtx({ phase: "ready", text: existing ?? "", error: String(e) });
+      }
+    },
+    [activeProfile, aiSchemaLines],
+  );
+
+  const aiOpenContext = useCallback(async () => {
+    if (!activeProfile?.id) return;
+    const existing = await invoke<string | null>("ai_load_context", {
+      profileId: activeProfile.id,
+    }).catch(() => null);
+    setAiCtx({ phase: "ready", text: existing ?? "", error: "" });
+  }, [activeProfile]);
+
+  const aiSaveContext = useCallback(
+    async (text: string) => {
+      if (!activeProfile?.id) return;
+      try {
+        await invoke("ai_save_context", { profileId: activeProfile.id, text });
+      } finally {
+        setAiCtx(null);
+      }
+    },
+    [activeProfile],
   );
 
   const paletteItems = useMemo<PaletteItem[]>(() => {
     const items: PaletteItem[] = [
       {
-        id: "ai",
-        label: "Ask AI for a query…",
+        id: "ai-new",
+        label: "Ask AI → new tab…",
         group: "ai",
+        hint: "schema + notes",
         prompt: {
           placeholder: "Describe the query you want…",
-          submit: (p) => aiAsk(p),
+          submit: (p) => aiAsk(p, "new"),
         },
+      },
+      {
+        id: "ai-current",
+        label: "Ask AI → current tab…",
+        group: "ai",
+        hint: "+ this tab's SQL & rows",
+        prompt: {
+          placeholder: "Modify/extend the current tab: describe what you want…",
+          submit: (p) => aiAsk(p, "current"),
+        },
+      },
+      {
+        id: "ai-init",
+        label: "Initialize AI context (explore database)…",
+        group: "ai",
+        hint: "read-only, writes CLAUDE.md",
+        prompt: {
+          placeholder: "Optional guidance (e.g. focus on battle tables) — ↵ to start",
+          allowEmpty: true,
+          submit: (g) => aiExplore(g),
+        },
+      },
+      {
+        id: "ai-view",
+        label: "View / edit AI context",
+        group: "ai",
+        run: () => aiOpenContext(),
       },
       { id: "new-tab", label: "New tab", group: "cmd", hint: "⌘T", run: () => addTab() },
       {
@@ -836,6 +928,8 @@ function App() {
     loadSnippets,
     exportTab,
     aiAsk,
+    aiExplore,
+    aiOpenContext,
   ]);
 
   const banner = conn
@@ -900,6 +994,17 @@ function App() {
       </div>
 
       {showPalette && <Palette items={paletteItems} onClose={() => setShowPalette(false)} />}
+
+      {aiCtx && (
+        <AiContextModal
+          phase={aiCtx.phase}
+          text={aiCtx.text}
+          error={aiCtx.error}
+          profileName={activeProfile?.name ?? ""}
+          onSave={aiSaveContext}
+          onClose={() => setAiCtx(null)}
+        />
+      )}
 
       {showConnections && (
         <ConnectionModal
