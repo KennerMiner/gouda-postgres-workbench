@@ -319,6 +319,42 @@ function App() {
     });
   }, []);
 
+  // Pointer-based tab dragging. HTML5 DnD is a dead end here: WebKit aborts
+  // the drag session as soon as the live reorder moves the dragged node.
+  const startTabDrag = useCallback(
+    (e: React.MouseEvent, id: number) => {
+      if (e.button !== 0 || renaming) return;
+      const startX = e.clientX;
+      let started = false;
+      const move = (ev: MouseEvent) => {
+        if (!started) {
+          if (Math.abs(ev.clientX - startX) < 5) return;
+          started = true;
+          setDragTabId(id);
+          document.body.classList.add("row-resizing"); // reuse the no-select rule
+        }
+        const els = document.querySelectorAll<HTMLElement>(".tab-bar .tab");
+        for (const el of els) {
+          const r = el.getBoundingClientRect();
+          if (ev.clientX >= r.left && ev.clientX <= r.right) {
+            const overId = Number(el.dataset.tabid);
+            if (overId !== id) moveTab(id, overId);
+            break;
+          }
+        }
+      };
+      const up = () => {
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup", up);
+        document.body.classList.remove("row-resizing");
+        setDragTabId(null);
+      };
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    },
+    [moveTab, renaming],
+  );
+
   const closeTab = useCallback(
     (id: number) => {
       setTabs((ts) => {
@@ -547,20 +583,11 @@ function App() {
                 className={`tab ${t.id === activeTabId ? "active" : ""} ${
                   t.id === dragTabId ? "dragging" : ""
                 }`}
+                data-tabid={t.id}
                 onClick={() => setActiveTabId(t.id)}
                 onDoubleClick={() => setRenaming({ id: t.id, text: t.title })}
+                onMouseDown={(e) => startTabDrag(e, t.id)}
                 title={t.lastSql || t.sql}
-                draggable={renaming?.id !== t.id}
-                onDragStart={(e) => {
-                  setDragTabId(t.id);
-                  e.dataTransfer.effectAllowed = "move";
-                }}
-                onDragEnd={() => setDragTabId(null)}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  if (dragTabId !== null && dragTabId !== t.id) moveTab(dragTabId, t.id);
-                }}
-                onDrop={(e) => e.preventDefault()}
               >
                 {t.running && <span className="tab-spinner">●</span>}
                 {renaming?.id === t.id ? (
