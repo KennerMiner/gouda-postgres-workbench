@@ -304,11 +304,7 @@ pub async fn connect_profile(
 
     if profile.read_only {
         let entry = connections.entry(info.conn_id).await?;
-        entry
-            .client()
-            .batch_execute("set default_transaction_read_only = on")
-            .await
-            .map_err(|e| format!("read-only setup: {}", crate::db::pg_err(&e)))?;
+        entry.set_read_only(true).await?;
     }
 
     let conn = store.0.lock().map_err(|e| e.to_string())?;

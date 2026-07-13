@@ -228,6 +228,7 @@ pub async fn apply_changes(
     state: State<'_, Connections>,
     store: State<'_, Store>,
     conn_id: u32,
+    tab_id: u32,
     schema: String,
     table: String,
     changes: ChangeSet,
@@ -243,7 +244,10 @@ pub async fn apply_changes(
     }
 
     let entry = state.entry(conn_id).await?;
-    let client = entry.client();
+    // The tab's own session — so applies participate in that tab's
+    // transaction when one is open.
+    let session = entry.session(tab_id).await?;
+    let client = &*session;
     let started_at = chrono::Utc::now().timestamp_millis();
     let start = std::time::Instant::now();
 

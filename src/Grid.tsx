@@ -4,6 +4,7 @@ import Inspector from "./Inspector";
 import { copyText } from "./clipboard";
 import { applyJsonSets, type JsonSetStage } from "./jsonSets";
 import { rowsToInsert, rowsToTsv } from "./rowCopy";
+import { toCsv } from "./export";
 import type { Path } from "./JsonTree";
 
 export type ColumnMeta = { name: string; typeName: string; typeOid: number };
@@ -471,10 +472,12 @@ export default function Grid({
   /** Selected rows in display order (stable, readable output). */
   const selectedRowData = () => order.filter((src) => rowSel.has(src)).map((src) => rows[src]);
 
-  const copyRows = (format: "tsv" | "insert") => {
+  const copyRows = (format: "csv" | "tsv" | "insert") => {
     const data = selectedRowData();
     if (!data.length) return;
-    if (format === "tsv") {
+    if (format === "csv") {
+      copyText(toCsv(columns, data));
+    } else if (format === "tsv") {
       copyText(rowsToTsv(data));
     } else {
       const table = editable
@@ -541,7 +544,7 @@ export default function Grid({
       case "c":
         if ((e.metaKey || e.ctrlKey) && rowSel.size) {
           e.preventDefault();
-          copyRows("tsv");
+          copyRows("csv");
         } else if ((e.metaKey || e.ctrlKey) && sel) {
           e.preventDefault();
           copyText(cellText(displayValue(toSrc(sel.r), sel.c) ?? null));
@@ -710,11 +713,14 @@ export default function Grid({
         {rowSel.size > 0 && (
           <>
             <span className="edits-count">{rowSel.size} row{rowSel.size === 1 ? "" : "s"}</span>
-            <button className="btn mini" onClick={() => copyRows("tsv")}>
-              Copy TSV
+            <button className="btn mini" onClick={() => copyRows("csv")} title="⌘C">
+              CSV
+            </button>
+            <button className="btn mini" onClick={() => copyRows("tsv")} title="tabs — pastes into spreadsheets as columns">
+              TSV
             </button>
             <button className="btn mini" onClick={() => copyRows("insert")}>
-              Copy INSERT
+              INSERT
             </button>
           </>
         )}

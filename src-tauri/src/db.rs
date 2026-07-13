@@ -26,12 +26,16 @@ const BATCH: usize = 500;
 /// 10M-row table eating all memory. The frontend flags truncation.
 const MAX_ROWS_DEFAULT: usize = 50_000;
 
-/// An open client plus a human-readable identity (`user@host/db`) used to
-/// label history entries. Holds its SSH tunnel (if any) so the tunnel lives
-/// exactly as long as the connection.
+/// A connection: a base client for metadata plus lazily-created per-tab
+/// sessions (queries in different tabs run concurrently; transactions are
+/// per-tab). Sessions share the stored config — and therefore the SSH tunnel,
+/// whose local listener accepts any number of TCP connections.
 pub struct ConnEntry {
-    client: Client,
+    config: tokio_postgres::Config,
+    base: Client,
     label: String,
+    read_only: std::sync::atomic::AtomicBool,
+    sessions: Mutex<HashMap<u32, Arc<Client>>>,
     _tunnel: Option<crate::tunnel::Tunnel>,
 }
 
@@ -42,12 +46,70 @@ pub struct Connections {
 }
 
 impl ConnEntry {
+    /// The base client — metadata queries (catalog, structure, sidebar).
     pub(crate) fn client(&self) -> &Client {
-        &self.client
+        &self.base
     }
 
     pub(crate) fn label(&self) -> &str {
         &self.label
+    }
+
+    async fn spawn_session(&self) -> Result<Client, String> {
+        let (client, connection) = self
+            .config
+            .connect(NoTls)
+            .await
+            .map_err(|e| format!("session connect: {}", pg_err(&e)))?;
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("postgres session error: {e}");
+            }
+        });
+        if self.read_only.load(std::sync::atomic::Ordering::Relaxed) {
+            client
+                .batch_execute("set default_transaction_read_only = on")
+                .await
+                .map_err(|e| format!("read-only setup: {}", pg_err(&e)))?;
+        }
+        Ok(client)
+    }
+
+    /// The session for a tab, created on first use; dead sessions respawn
+    /// transparently (e.g. after laptop sleep).
+    pub(crate) async fn session(&self, tab_id: u32) -> Result<Arc<Client>, String> {
+        let mut map = self.sessions.lock().await;
+        if let Some(c) = map.get(&tab_id) {
+            if !c.is_closed() {
+                return Ok(c.clone());
+            }
+            map.remove(&tab_id);
+        }
+        let client = Arc::new(self.spawn_session().await?);
+        map.insert(tab_id, client.clone());
+        Ok(client)
+    }
+
+    pub(crate) async fn drop_session(&self, tab_id: u32) {
+        self.sessions.lock().await.remove(&tab_id);
+    }
+
+    pub(crate) async fn set_read_only(&self, on: bool) -> Result<(), String> {
+        self.read_only
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+        let sql = if on {
+            "set default_transaction_read_only = on"
+        } else {
+            "set default_transaction_read_only = off"
+        };
+        self.base
+            .batch_execute(sql)
+            .await
+            .map_err(|e| pg_err(&e))?;
+        for c in self.sessions.lock().await.values() {
+            let _ = c.batch_execute(sql).await;
+        }
+        Ok(())
     }
 }
 
@@ -269,8 +331,11 @@ pub async fn open_config(
     state.map.lock().await.insert(
         conn_id,
         Arc::new(ConnEntry {
-            client,
+            config,
+            base: client,
             label,
+            read_only: std::sync::atomic::AtomicBool::new(false),
+            sessions: Mutex::new(HashMap::new()),
             _tunnel: tunnel,
         }),
     );
@@ -295,11 +360,17 @@ pub async fn connect(state: State<'_, Connections>, dsn: String) -> Result<ConnI
 /// goes out-of-band on a fresh socket, so this works while `run_query` is
 /// blocked streaming.
 #[tauri::command]
-pub async fn cancel_query(state: State<'_, Connections>, conn_id: u32) -> Result<(), String> {
+pub async fn cancel_query(
+    state: State<'_, Connections>,
+    conn_id: u32,
+    tab_id: u32,
+) -> Result<(), String> {
     let entry = state.get(conn_id).await?;
-    entry
-        .client
-        .cancel_token()
+    let token = match entry.sessions.lock().await.get(&tab_id) {
+        Some(c) => c.cancel_token(),
+        None => entry.base.cancel_token(),
+    };
+    token
         .cancel_query(NoTls)
         .await
         .map_err(|e| format!("cancel: {e}"))
@@ -321,7 +392,7 @@ pub async fn list_objects(
 ) -> Result<Vec<DbObject>, String> {
     let entry = state.get(conn_id).await?;
     let rows = entry
-        .client
+        .client()
         .query(
             r#"select n.nspname,
                       c.relname,
@@ -352,7 +423,7 @@ pub async fn list_objects(
             })
             .collect()),
         Err(e) => {
-            state.drop_if_closed(conn_id, &entry.client).await;
+            state.drop_if_closed(conn_id, &entry.client()).await;
             Err(e)
         }
     }
@@ -382,7 +453,7 @@ pub async fn schema_catalog(
 ) -> Result<Vec<CatalogTable>, String> {
     let entry = state.get(conn_id).await?;
     let rows = entry
-        .client
+        .client()
         .query(
             r#"select n.nspname,
                       c.relname,
@@ -407,7 +478,7 @@ pub async fn schema_catalog(
     let rows = match rows {
         Ok(r) => r,
         Err(e) => {
-            state.drop_if_closed(conn_id, &entry.client).await;
+            state.drop_if_closed(conn_id, &entry.client()).await;
             return Err(e);
         }
     };
@@ -475,7 +546,7 @@ pub async fn table_structure(
     table: String,
 ) -> Result<TableStructure, String> {
     let entry = state.get(conn_id).await?;
-    let client = &entry.client;
+    let client = entry.client();
     let run = async {
         let cols = client
             .query(
@@ -555,16 +626,45 @@ pub async fn table_structure(
     result
 }
 
-/// Fire-and-forget statement with no result plumbing — used for session
-/// control (begin/commit/rollback, SET …).
+/// Fire-and-forget statement on a TAB's session — transaction control
+/// (begin/commit/rollback) is per-tab by design.
 #[tauri::command]
-pub async fn exec_simple(state: State<'_, Connections>, conn_id: u32, sql: String) -> Result<(), String> {
+pub async fn exec_session(
+    state: State<'_, Connections>,
+    conn_id: u32,
+    tab_id: u32,
+    sql: String,
+) -> Result<(), String> {
     let entry = state.get(conn_id).await?;
-    let res = entry.client.batch_execute(&sql).await.map_err(|e| pg_err(&e));
-    if res.is_err() {
-        state.drop_if_closed(conn_id, &entry.client).await;
+    let client = entry.session(tab_id).await?;
+    let res = client.batch_execute(&sql).await.map_err(|e| pg_err(&e));
+    if res.is_err() && client.is_closed() {
+        entry.drop_session(tab_id).await;
     }
     res
+}
+
+/// Session read-only toggle, applied to the base client and every tab session.
+#[tauri::command]
+pub async fn set_read_only(
+    state: State<'_, Connections>,
+    conn_id: u32,
+    on: bool,
+) -> Result<(), String> {
+    state.get(conn_id).await?.set_read_only(on).await
+}
+
+/// Free a tab's session when the tab closes.
+#[tauri::command]
+pub async fn close_session(
+    state: State<'_, Connections>,
+    conn_id: u32,
+    tab_id: u32,
+) -> Result<(), String> {
+    if let Ok(entry) = state.get(conn_id).await {
+        entry.drop_session(tab_id).await;
+    }
+    Ok(())
 }
 
 /// EXPLAIN a statement, returning the JSON plan. ANALYZE (which executes the
@@ -575,10 +675,12 @@ pub async fn explain_query(
     state: State<'_, Connections>,
     history: State<'_, crate::store::Store>,
     conn_id: u32,
+    tab_id: u32,
     sql: String,
     analyze: bool,
 ) -> Result<serde_json::Value, String> {
     let entry = state.get(conn_id).await?;
+    let session = entry.session(tab_id).await?;
     let head = sql.trim_start().to_lowercase();
     let safe_analyze =
         analyze && (head.starts_with("select") || head.starts_with("with") || head.starts_with("values"));
@@ -591,10 +693,7 @@ pub async fn explain_query(
     let started_at = chrono::Utc::now().timestamp_millis();
     let start = std::time::Instant::now();
 
-    let row = entry.client.query_one(&full, &[]).await.map_err(|e| {
-        let msg = pg_err(&e);
-        msg
-    });
+    let row = session.query_one(&full, &[]).await.map_err(|e| pg_err(&e));
     match row {
         Ok(row) => {
             let plan: serde_json::Value = row.get(0);
@@ -610,7 +709,9 @@ pub async fn explain_query(
             Ok(plan)
         }
         Err(e) => {
-            state.drop_if_closed(conn_id, &entry.client).await;
+            if session.is_closed() {
+                entry.drop_session(tab_id).await;
+            }
             Err(e)
         }
     }
@@ -625,6 +726,7 @@ pub async fn run_query(
     state: State<'_, Connections>,
     history: State<'_, crate::store::Store>,
     conn_id: u32,
+    tab_id: u32,
     sql: String,
     max_rows: Option<u32>,
     on_event: Channel<QueryEvent>,
@@ -638,7 +740,14 @@ pub async fn run_query(
             return Ok(());
         }
     };
-    let client = &entry.client;
+    let session = match entry.session(tab_id).await {
+        Ok(c) => c,
+        Err(message) => {
+            let _ = on_event.send(QueryEvent::Error { message });
+            return Ok(());
+        }
+    };
+    let client: &Client = &session;
 
     let result: Result<(usize, bool), String> = async {
         let stmt = client.prepare(&sql).await.map_err(|e| pg_err(&e))?;
@@ -733,7 +842,10 @@ pub async fn run_query(
                 Some(&message),
             );
             let _ = on_event.send(QueryEvent::Error { message });
-            state.drop_if_closed(conn_id, client).await;
+            if client.is_closed() {
+                entry.drop_session(tab_id).await;
+            }
+            state.drop_if_closed(conn_id, &entry.base).await;
         }
     }
     Ok(())

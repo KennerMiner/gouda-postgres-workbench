@@ -12,6 +12,7 @@ import { buildNamespace, type CatalogTable } from "./sqlNamespace";
 import { toCsv, toJson } from "./export";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { SQLNamespace } from "@codemirror/lang-sql";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
 
 type QueryEvent =
@@ -49,7 +50,12 @@ type QueryTab = {
   running: boolean;
   plan: PlanRoot[] | null;
   structure: TableStructure | null;
+  tx: "none" | "open" | "aborted";
 };
+
+// Each window persists its own tab session.
+const WIN_LABEL = getCurrentWindow().label;
+const SESSION_KEY = WIN_LABEL === "main" ? "session" : `session:${WIN_LABEL}`;
 
 const DEFAULT_SQL =
   "select table_name, table_type from information_schema.tables where table_schema = 'public' order by 1;";
@@ -113,6 +119,7 @@ function blankTab(id: number, sql = ""): QueryTab {
     running: false,
     plan: null,
     structure: null,
+    tx: "none",
   };
 }
 
@@ -169,7 +176,7 @@ function App() {
       setConn(info);
       setActiveProfile(p);
       activeProfileRef.current = p;
-      setTx("none");
+      setTabs((ts) => ts.map((t) => ({ ...t, tx: "none" })));
       setReadOnly(p.readOnly);
       setShowConnections(false);
       setObjects(await invoke<DbObject[]>("list_objects", { connId: info.connId }));
@@ -229,7 +236,7 @@ function App() {
   useEffect(() => {
     (async () => {
       try {
-        const raw = await invoke<string | null>("state_get", { key: "session" });
+        const raw = await invoke<string | null>("state_get", { key: SESSION_KEY });
         if (!raw) return;
         const saved = JSON.parse(raw) as {
           tabs: Pick<QueryTab, "id" | "title" | "customTitle" | "sql" | "lastSql">[];
@@ -270,7 +277,7 @@ function App() {
         activeTabId,
         nextTabId: nextTabId.current,
       };
-      invoke("state_set", { key: "session", value: JSON.stringify(payload) }).catch(() => {});
+      invoke("state_set", { key: SESSION_KEY, value: JSON.stringify(payload) }).catch(() => {});
     }, 400);
   }, [tabs, activeTabId]);
 
@@ -378,8 +385,12 @@ function App() {
                 });
               break;
             }
-            updateTab(id, { error: ev.message, running: false });
-            if (txRef.current === "open") setTx("aborted");
+            const wasInTx = tabsRef.current.find((t) => t.id === id)?.tx === "open";
+            updateTab(id, {
+              error: ev.message,
+              running: false,
+              ...(wasInTx ? { tx: "aborted" as const } : {}),
+            });
             loadHistoryRef.current();
             resolve(false);
             break;
@@ -387,7 +398,7 @@ function App() {
         }
       };
 
-      invoke("run_query", { connId, sql: text, onEvent: channel }).catch((e) => {
+      invoke("run_query", { connId, tabId: id, sql: text, onEvent: channel }).catch((e) => {
         updateTab(id, { error: String(e), running: false });
         resolve(false);
       });
@@ -439,6 +450,7 @@ function App() {
       try {
         const plan = await invoke<PlanRoot[]>("explain_query", {
           connId: conn.connId,
+          tabId: id,
           sql: stmt,
           analyze: true,
         });
@@ -460,13 +472,14 @@ function App() {
   const run = useCallback(() => runScript(activeTab.sql), [runScript, activeTab.sql]);
 
   const stop = useCallback(async () => {
-    if (!conn) return;
+    const connId = connRef.current?.connId;
+    if (!connId) return;
     try {
-      await invoke("cancel_query", { connId: conn.connId });
+      await invoke("cancel_query", { connId, tabId: activeTabIdRef.current });
     } catch {
       // Cancellation is best-effort; the running query surfaces the error.
     }
-  }, [conn]);
+  }, []);
 
   const addTab = useCallback((sql = "") => {
     const id = nextTabId.current++;
@@ -475,9 +488,6 @@ function App() {
     return id;
   }, []);
 
-  const [tx, setTx] = useState<"none" | "open" | "aborted">("none");
-  const txRef = useRef(tx);
-  txRef.current = tx;
   const [readOnly, setReadOnly] = useState(false);
   const [snippets, setSnippets] = useState<Snippet[]>([]);
   const [showPalette, setShowPalette] = useState(false);
@@ -496,36 +506,33 @@ function App() {
     loadSnippets();
   }, [loadSnippets]);
 
-  const execSimple = useCallback(
-    async (sql: string) => {
-      if (!conn) throw new Error("not connected");
-      await invoke("exec_simple", { connId: conn.connId, sql });
-    },
-    [conn],
-  );
-
   const txAction = useCallback(
     async (action: "begin" | "commit" | "rollback") => {
+      const connId = connRef.current?.connId;
+      const tabId = activeTabIdRef.current;
+      if (!connId) return;
       try {
-        await execSimple(action);
-        setTx(action === "begin" ? "open" : "none");
+        await invoke("exec_session", { connId, tabId, sql: action });
+        updateTab(tabId, { tx: action === "begin" ? "open" : "none" });
       } catch {
         // Failed tx control: reflect reality as best we can.
-        if (action !== "begin") setTx("none");
+        if (action !== "begin") updateTab(tabId, { tx: "none" });
       }
     },
-    [execSimple],
+    [updateTab],
   );
 
   const toggleReadOnly = useCallback(async () => {
+    const connId = connRef.current?.connId;
+    if (!connId) return;
     const next = !readOnly;
     try {
-      await execSimple(`set default_transaction_read_only = ${next ? "on" : "off"}`);
+      await invoke("set_read_only", { connId, on: next });
       setReadOnly(next);
     } catch {
       // surfaced on next query if the session is dead
     }
-  }, [execSimple, readOnly]);
+  }, [readOnly]);
 
   const [renaming, setRenaming] = useState<{ id: number; text: string } | null>(null);
   const [dragTabId, setDragTabId] = useState<number | null>(null);
@@ -608,6 +615,8 @@ function App() {
           setActiveTabId(next[Math.max(0, idx - 1)].id);
         }
         rowBuffers.current.delete(id);
+        const connId = connRef.current?.connId;
+        if (connId) invoke("close_session", { connId, tabId: id }).catch(() => {});
         return next;
       });
     },
@@ -620,6 +629,9 @@ function App() {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "t") {
         e.preventDefault();
         addTab();
+      } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === "n" || e.key === "N")) {
+        e.preventDefault();
+        invoke("open_new_window").catch(() => {});
       } else if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
         setShowPalette((v) => !v);
@@ -948,14 +960,22 @@ function App() {
         run: () => exportTab(activeTabIdRef.current, "json"),
       },
     );
-    if (tx === "none") {
-      items.push({ id: "begin", label: "Begin transaction", group: "cmd", run: () => txAction("begin") });
+    const activeTx = tabsRef.current.find((t) => t.id === activeTabIdRef.current)?.tx ?? "none";
+    if (activeTx === "none") {
+      items.push({ id: "begin", label: "Begin transaction (this tab)", group: "cmd", run: () => txAction("begin") });
     } else {
       items.push(
         { id: "commit", label: "Commit transaction", group: "cmd", run: () => txAction("commit") },
         { id: "rollback", label: "Rollback transaction", group: "cmd", run: () => txAction("rollback") },
       );
     }
+    items.push({
+      id: "new-window",
+      label: "New window",
+      group: "cmd",
+      hint: "⌘⇧N — separate connection",
+      run: () => invoke("open_new_window").catch(() => {}),
+    });
     for (const o of objects) {
       items.push({
         id: `open:${o.schema}.${o.name}`,
@@ -998,7 +1018,7 @@ function App() {
     connectProfile,
     readOnly,
     toggleReadOnly,
-    tx,
+    tabs,
     txAction,
     objects,
     snippets,
@@ -1358,6 +1378,7 @@ function App() {
                     applyChanges={(schema, table, changes: ChangeSet, dryRun) =>
                       invoke<string[]>("apply_changes", {
                         connId: conn?.connId ?? 0,
+                        tabId: t.id,
                         schema,
                         table,
                         changes,
@@ -1377,17 +1398,17 @@ function App() {
 
           <div className="statusbar">
             <span className="hint">
-              {tx === "none" && (
+              {activeTab.tx === "none" && (
                 <button className="btn mini" disabled={!conn} onClick={() => txAction("begin")}>
                   Begin
                 </button>
               )}
-              {tx !== "none" && (
+              {activeTab.tx !== "none" && (
                 <>
-                  <span className={`tx-state ${tx}`}>
-                    {tx === "open" ? "in transaction" : "transaction aborted"}
+                  <span className={`tx-state ${activeTab.tx}`}>
+                    {activeTab.tx === "open" ? "in transaction (this tab)" : "transaction aborted"}
                   </span>
-                  {tx === "open" && (
+                  {activeTab.tx === "open" && (
                     <button className="btn mini" onClick={() => txAction("commit")}>
                       Commit
                     </button>

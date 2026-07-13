@@ -35,7 +35,7 @@ Personal daily driver, macOS-first.
 - [x] SSH tunnel support (russh): agent + key-file auth, known_hosts
       verification, tunnel lifetime tied to connection; per-profile SSH
       section in the manager; end-to-end test against the dev bastion
-- [ ] Connection pooling + one persistent session per tab (deadpool)
+- [x] One session per tab (lazy, shared tunnel) — supersedes the pooling idea
 - [x] CodeMirror 6 editor: Postgres highlighting, ⌘↵ = run selection or
       statement under cursor (string/dollar-quote/comment-aware splitter,
       unit-tested)
@@ -86,7 +86,12 @@ Personal daily driver, macOS-first.
       header sort (source-index-safe with staged edits) + drag resize
 - [x] Structure view (columns/defaults/nullability, indexes w/ PK+unique
       badges, constraints w/ definitions) via grid-toolbar toggle
-- [x] Row selection (gutter click/shift/⌘) → copy TSV or multi-row INSERT
+- [x] Row selection (gutter click/shift/⌘) → copy CSV (⌘C) / TSV / INSERT
+- [x] Session-per-tab: tabs query concurrently over one connection (+SSH
+      tunnel shared); transactions are per-tab; Stop cancels the active
+      tab; dead sessions respawn transparently
+- [x] Multi-window (⌘⇧N): separate connection per window — the window
+      boundary prevents wrong-server accidents; per-window tab sessions
 - [x] Session persistence: tabs restore across launches (app_state KV)
 - [x] Saved queries: snippets + sidebar Queries tab + palette flows
 - [x] Ask AI (⌘K): claude CLI generates a commented query into a new tab —
