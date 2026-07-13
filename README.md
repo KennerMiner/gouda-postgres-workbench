@@ -1,6 +1,6 @@
-# psqlViewer
+# Gouda
 
-A fast, keyboard-first PostgreSQL client for macOS. Tauri v2 + Rust + React;
+A Postgres workbench for macOS — fast, keyboard-first. Tauri v2 + Rust + React;
 ~18 MB app, results stream as they arrive.
 
 ## Features
@@ -72,11 +72,11 @@ if installed — no API key required)
 Prereqs: [Rust](https://rustup.rs), Node 20+, macOS.
 
 ```sh
-git clone https://github.com/KennerMiner/psqlViewer
-cd psqlViewer
+git clone https://github.com/KennerMiner/gouda-postgres-workbench
+cd gouda-postgres-workbench
 npm install
 npm run tauri build
-# → src-tauri/target/release/bundle/macos/psqlViewer.app — drag to /Applications
+# → src-tauri/target/release/bundle/macos/Gouda.app — drag to /Applications
 ```
 
 Dev mode: `npm run tauri dev`.

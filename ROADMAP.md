@@ -1,4 +1,4 @@
-# psqlViewer
+# Gouda (né psqlViewer) — build log
 
 A sleek Postgres client (TablePlus/Beekeeper energy) built on Tauri v2 + Rust + React.
 Personal daily driver, macOS-first.

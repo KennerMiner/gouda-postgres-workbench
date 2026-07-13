@@ -1,5 +1,5 @@
 //! Connection profiles. Metadata lives in the shared SQLite store; passwords
-//! live in the macOS Keychain under service "psqlViewer", account "profile-<id>".
+//! live in the macOS Keychain under service "Gouda", account "profile-<id>".
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -7,7 +7,7 @@ use tauri::State;
 use crate::db::{ConnInfo, Connections};
 use crate::store::Store;
 
-const KEYCHAIN_SERVICE: &str = "psqlViewer";
+const KEYCHAIN_SERVICE: &str = "Gouda";
 
 fn entry(profile_id: i64) -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYCHAIN_SERVICE, &format!("profile-{profile_id}"))

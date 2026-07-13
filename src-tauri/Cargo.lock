@@ -1950,6 +1950,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "gouda"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "futures",
+ "keyring",
+ "native-tls",
+ "postgres-native-tls",
+ "postgres-types",
+ "rusqlite",
+ "russh",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+ "tokio",
+ "tokio-postgres",
+ "uuid",
+]
+
+[[package]]
 name = "group"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3699,30 +3723,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "psqlviewer"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "futures",
- "keyring",
- "native-tls",
- "postgres-native-tls",
- "postgres-types",
- "rusqlite",
- "russh",
- "rust_decimal",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "tokio",
- "tokio-postgres",
- "uuid",
 ]
 
 [[package]]

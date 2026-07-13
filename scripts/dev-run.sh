@@ -9,6 +9,6 @@ BIN="$1"
 shift
 IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' 'NR==1 {print $2}')
 if [ -n "$IDENTITY" ]; then
-  codesign --force --sign "$IDENTITY" --identifier com.kminer.psqlviewer "$BIN" 2>/dev/null || true
+  codesign --force --sign "$IDENTITY" --identifier com.kminer.gouda "$BIN" 2>/dev/null || true
 fi
 exec "$BIN" "$@"
