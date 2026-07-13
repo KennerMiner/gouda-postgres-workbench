@@ -5,20 +5,6 @@ A Postgres workbench for macOS — fast, keyboard-first. Tauri v2 + Rust + React
 
 ![Query editor and results grid](docs/screenshots/grid.png)
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/explain.png" alt="Visual EXPLAIN"><br><sub><b>Visual EXPLAIN</b> — plan tree with time bars and self-time heat</sub></td>
-    <td width="50%"><img src="docs/screenshots/jsonb-inspector.png" alt="JSONB inspector"><br><sub><b>JSONB inspector</b> — collapsible typed tree, filter, copy-as-path</sub></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/er-diagram.png" alt="ER diagram"><br><sub><b>ER diagram</b> — draggable FK graph</sub></td>
-    <td width="50%"><img src="docs/screenshots/command-palette.png" alt="Command palette"><br><sub><b>Command palette</b> (⌘K) — commands, tables, snippets</sub></td>
-  </tr>
-</table>
-
-![Activity monitor](docs/screenshots/activity-monitor.png)
-<sub><b>Activity monitor</b> — live <code>pg_stat_activity</code> with cancel / kill per session</sub>
-
 ## Features
 
 **Connections**
@@ -51,6 +37,8 @@ A Postgres workbench for macOS — fast, keyboard-first. Tauri v2 + Rust + React
 - **JSONB inspector**: collapsible typed tree, key/value filter,
   copy-as-Postgres-path (`"payload"->'items'->0->>'id'`)
 
+![JSONB inspector](docs/screenshots/jsonb-inspector.png)
+
 **Editing**
 - Results are editable only when they map to a single table with its full
   primary key present (detected from the wire protocol)
@@ -64,10 +52,19 @@ A Postgres workbench for macOS — fast, keyboard-first. Tauri v2 + Rust + React
 - **Visual EXPLAIN**: plan tree with time/cost bars, self-time heat,
   est-vs-actual and rows-filtered-out badges (ANALYZE only ever runs for
   selects — writes are planned, never executed)
+
+![Visual EXPLAIN](docs/screenshots/explain.png)
+
 - **Activity monitor**: live `pg_stat_activity` with cancel / kill per session
+
+![Activity monitor](docs/screenshots/activity-monitor.png)
+
 - **Schema diff** between two profiles (columns, indexes, constraints)
 - **LISTEN/NOTIFY console** with live event log and test sender
 - **ER diagram** from the FK graph (draggable; positions persist)
+
+![ER diagram](docs/screenshots/er-diagram.png)
+
 - Structure view (columns / indexes / constraints), sidebar schema browser
   with column lists, server browser (roles, databases, settings…)
 
@@ -82,6 +79,8 @@ if installed — no API key required)
   JSON shapes, conventions), which future requests read automatically
 
 **Command palette** (⌘K) — every command, every table, every saved query.
+
+![Command palette](docs/screenshots/command-palette.png)
 
 ## Install
 
