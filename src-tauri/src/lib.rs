@@ -40,6 +40,8 @@ pub fn run() {
             snippets::snippet_list,
             snippets::snippet_save,
             snippets::snippet_delete,
+            store::state_get,
+            store::state_set,
             write_file,
             profiles::profiles_list,
             profiles::profile_save,

@@ -266,6 +266,40 @@ body,
   color: var(--text-dim);
 }
 
+.snip-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.snip-name {
+  flex: 1;
+  font-size: 11.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snip-del {
+  padding: 0 5px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.snip-row:hover .snip-del {
+  visibility: visible;
+}
+
+.snip-del:hover {
+  color: var(--err);
+  background: var(--bg-header);
+}
+
 .schema-row {
   display: flex;
   align-items: center;

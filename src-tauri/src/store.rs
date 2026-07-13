@@ -3,7 +3,7 @@
 
 use rusqlite::Connection;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 
 pub struct Store(pub Mutex<Connection>);
 
@@ -53,6 +53,10 @@ impl Store {
                  id   integer primary key,
                  name text not null unique,
                  sql  text not null
+             );
+             create table if not exists app_state (
+                 key   text primary key,
+                 value text not null
              );",
         )?;
 
@@ -74,4 +78,28 @@ impl Store {
 
         Ok(Self(Mutex::new(conn)))
     }
+}
+
+/// Generic UI state persistence (session tabs, window prefs, …).
+#[tauri::command]
+pub fn state_get(store: State<'_, Store>, key: String) -> Result<Option<String>, String> {
+    let conn = store.0.lock().map_err(|e| e.to_string())?;
+    conn.query_row("select value from app_state where key = ?1", [key], |r| r.get(0))
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            e => Err(e.to_string()),
+        })
+}
+
+#[tauri::command]
+pub fn state_set(store: State<'_, Store>, key: String, value: String) -> Result<(), String> {
+    let conn = store.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "insert into app_state (key, value) values (?1, ?2)
+         on conflict(key) do update set value = excluded.value",
+        rusqlite::params![key, value],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }

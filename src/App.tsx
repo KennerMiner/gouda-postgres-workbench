@@ -108,7 +108,8 @@ function App() {
   const [filter, setFilter] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string>("");
-  const [sideTab, setSideTab] = useState<"items" | "history">("items");
+  const [sideTab, setSideTab] = useState<"items" | "queries" | "history">("items");
+  const [snippetFilter, setSnippetFilter] = useState("");
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
   const [historyFilter, setHistoryFilter] = useState("");
 
@@ -197,6 +198,55 @@ function App() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // --- session persistence: tabs restore across launches -------------------
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await invoke<string | null>("state_get", { key: "session" });
+        if (!raw) return;
+        const saved = JSON.parse(raw) as {
+          tabs: Pick<QueryTab, "id" | "title" | "customTitle" | "sql" | "lastSql">[];
+          activeTabId: number;
+          nextTabId: number;
+        };
+        if (!saved.tabs?.length) return;
+        setTabs(
+          saved.tabs.map((t) => ({
+            ...blankTab(t.id, t.sql),
+            title: t.title,
+            customTitle: t.customTitle,
+            lastSql: t.lastSql,
+          })),
+        );
+        const ids = new Set(saved.tabs.map((t) => t.id));
+        setActiveTabId(ids.has(saved.activeTabId) ? saved.activeTabId : saved.tabs[0].id);
+        nextTabId.current = Math.max(saved.nextTabId ?? 0, ...saved.tabs.map((t) => t.id + 1));
+      } catch {
+        // A corrupt session blob should never block launch.
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const sessionTimer = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    window.clearTimeout(sessionTimer.current);
+    sessionTimer.current = window.setTimeout(() => {
+      const payload = {
+        tabs: tabs.map(({ id, title, customTitle, sql, lastSql }) => ({
+          id,
+          title,
+          customTitle,
+          sql,
+          lastSql,
+        })),
+        activeTabId,
+        nextTabId: nextTabId.current,
+      };
+      invoke("state_set", { key: "session", value: JSON.stringify(payload) }).catch(() => {});
+    }, 400);
+  }, [tabs, activeTabId]);
 
   const loadHistory = useCallback(async () => {
     try {
@@ -811,6 +861,12 @@ function App() {
               Items
             </button>
             <button
+              className={sideTab === "queries" ? "active" : ""}
+              onClick={() => setSideTab("queries")}
+            >
+              Queries
+            </button>
+            <button
               className={sideTab === "history" ? "active" : ""}
               onClick={() => setSideTab("history")}
             >
@@ -874,6 +930,57 @@ function App() {
                       })}
                   </div>
                 ))}
+              </div>
+            </>
+          ) : sideTab === "queries" ? (
+            <>
+              <input
+                className="filter"
+                value={snippetFilter}
+                onChange={(e) => setSnippetFilter(e.target.value)}
+                placeholder="Search saved queries…"
+                spellCheck={false}
+              />
+              <div className="tree">
+                {snippets.length === 0 && (
+                  <div className="tree-empty">
+                    No saved queries yet — ⌘K → "Save current SQL as snippet…"
+                  </div>
+                )}
+                {snippets
+                  .filter((sn) => sn.name.toLowerCase().includes(snippetFilter.trim().toLowerCase()))
+                  .map((sn) => (
+                    <div
+                      key={sn.id}
+                      className="hist-row snip-row"
+                      onClick={() => {
+                        const active = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
+                        if (active && !active.sql.trim()) updateTab(active.id, { sql: sn.sql });
+                        else addTab(sn.sql);
+                      }}
+                      title={sn.sql}
+                    >
+                      <div className="snip-head">
+                        <span className="snip-name">{sn.name}</span>
+                        <button
+                          className="snip-del"
+                          title="Delete saved query"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              await invoke("snippet_delete", { snippetId: sn.id });
+                              await loadSnippets();
+                            } catch {
+                              // non-critical
+                            }
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                      <div className="hist-sql">{sn.sql}</div>
+                    </div>
+                  ))}
               </div>
             </>
           ) : (
