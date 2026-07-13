@@ -47,7 +47,7 @@ impl SslChoice {
     }
 }
 
-fn make_tls(ssl: SslChoice) -> Result<Option<postgres_native_tls::MakeTlsConnector>, String> {
+pub(crate) fn make_tls(ssl: SslChoice) -> Result<Option<postgres_native_tls::MakeTlsConnector>, String> {
     let connector = match ssl {
         SslChoice::Disable => return Ok(None),
         SslChoice::Require => native_tls::TlsConnector::builder()
@@ -121,6 +121,14 @@ impl ConnEntry {
 
     pub(crate) fn label(&self) -> &str {
         &self.label
+    }
+
+    pub(crate) fn listen_config(&self) -> tokio_postgres::Config {
+        self.config.clone()
+    }
+
+    pub(crate) fn ssl(&self) -> SslChoice {
+        self.ssl
     }
 
     async fn spawn_session(&self) -> Result<Client, String> {
@@ -679,6 +687,150 @@ pub async fn table_structure(
         state.drop_if_closed(conn_id, client).await;
     }
     result
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityRow {
+    pid: i32,
+    user: Option<String>,
+    database: Option<String>,
+    app: Option<String>,
+    client: Option<String>,
+    state: Option<String>,
+    wait: Option<String>,
+    query_start_ms: Option<i64>,
+    xact_start_ms: Option<i64>,
+    query: Option<String>,
+    backend_type: Option<String>,
+}
+
+/// Live session list for the activity monitor.
+#[tauri::command]
+pub async fn activity_list(
+    state: State<'_, Connections>,
+    conn_id: u32,
+) -> Result<Vec<ActivityRow>, String> {
+    let entry = state.get(conn_id).await?;
+    let rows = entry
+        .client()
+        .query(
+            r#"select pid,
+                      usename::text,
+                      datname::text,
+                      application_name,
+                      client_addr::text,
+                      state,
+                      wait_event_type,
+                      (extract(epoch from query_start) * 1000)::bigint,
+                      (extract(epoch from xact_start) * 1000)::bigint,
+                      left(query, 300),
+                      backend_type
+               from pg_stat_activity
+               where pid <> pg_backend_pid()
+               order by query_start desc nulls last"#,
+            &[],
+        )
+        .await
+        .map_err(|e| pg_err(&e));
+    match rows {
+        Ok(rows) => Ok(rows
+            .iter()
+            .map(|r| ActivityRow {
+                pid: r.get(0),
+                user: r.get(1),
+                database: r.get(2),
+                app: r.get(3),
+                client: r.get(4),
+                state: r.get(5),
+                wait: r.get(6),
+                query_start_ms: r.get(7),
+                xact_start_ms: r.get(8),
+                query: r.get(9),
+                backend_type: r.get(10),
+            })
+            .collect()),
+        Err(e) => {
+            state.drop_if_closed(conn_id, entry.client()).await;
+            Err(e)
+        }
+    }
+}
+
+/// Cancel (interrupt the query) or terminate (kill the session) a backend.
+#[tauri::command]
+pub async fn kill_backend(
+    state: State<'_, Connections>,
+    conn_id: u32,
+    pid: i32,
+    terminate: bool,
+) -> Result<bool, String> {
+    let entry = state.get(conn_id).await?;
+    let func = if terminate {
+        "select pg_terminate_backend($1)"
+    } else {
+        "select pg_cancel_backend($1)"
+    };
+    let row = entry
+        .client()
+        .query_one(func, &[&pid])
+        .await
+        .map_err(|e| pg_err(&e))?;
+    Ok(row.get(0))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FkEdge {
+    src_schema: String,
+    src_table: String,
+    src_cols: Vec<String>,
+    dst_schema: String,
+    dst_table: String,
+    dst_cols: Vec<String>,
+    name: String,
+}
+
+/// Foreign-key graph for the ER diagram.
+#[tauri::command]
+pub async fn er_graph(state: State<'_, Connections>, conn_id: u32) -> Result<Vec<FkEdge>, String> {
+    let entry = state.get(conn_id).await?;
+    let rows = entry
+        .client()
+        .query(
+            r#"select ns.nspname, cs.relname,
+                      array_agg(a.attname order by k.ord),
+                      nd.nspname, cd.relname,
+                      array_agg(ad.attname order by k.ord),
+                      con.conname
+               from pg_constraint con
+               join lateral unnest(con.conkey, con.confkey)
+                    with ordinality as k(src_att, dst_att, ord) on true
+               join pg_class cs on cs.oid = con.conrelid
+               join pg_namespace ns on ns.oid = cs.relnamespace
+               join pg_class cd on cd.oid = con.confrelid
+               join pg_namespace nd on nd.oid = cd.relnamespace
+               join pg_attribute a on a.attrelid = con.conrelid and a.attnum = k.src_att
+               join pg_attribute ad on ad.attrelid = con.confrelid and ad.attnum = k.dst_att
+               where con.contype = 'f'
+               group by con.oid, ns.nspname, cs.relname, nd.nspname, cd.relname, con.conname
+               order by 1, 2"#,
+            &[],
+        )
+        .await
+        .map_err(|e| pg_err(&e))?;
+    Ok(rows
+        .iter()
+        .map(|r| FkEdge {
+            src_schema: r.get(0),
+            src_table: r.get(1),
+            src_cols: r.get(2),
+            dst_schema: r.get(3),
+            dst_table: r.get(4),
+            dst_cols: r.get(5),
+            name: r.get(6),
+        })
+        .collect())
 }
 
 fn csv_field(s: &str) -> String {

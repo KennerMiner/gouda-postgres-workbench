@@ -7,6 +7,10 @@ import Palette, { type PaletteItem } from "./Palette";
 import AiContextModal from "./AiContextModal";
 import PlanView, { type PlanRoot } from "./PlanView";
 import StructureView, { type TableStructure } from "./StructureView";
+import MonitorView from "./MonitorView";
+import NotifyView from "./NotifyView";
+import ERView from "./ERView";
+import DiffView from "./DiffView";
 import { splitStatements } from "./sqlStatements";
 import { buildNamespace, type CatalogTable } from "./sqlNamespace";
 import { META_HELP, SERVER_QUERIES, translateMeta } from "./metaCommands";
@@ -52,6 +56,7 @@ type QueryTab = {
   structure: TableStructure | null;
   structureTitle: string;
   notice: string;
+  special: "monitor" | "notify" | "er" | "diff" | null;
   tx: "none" | "open" | "aborted";
 };
 
@@ -123,6 +128,7 @@ function blankTab(id: number, sql = ""): QueryTab {
     structure: null,
     structureTitle: "",
     notice: "",
+    special: null,
     tx: "none",
   };
 }
@@ -379,6 +385,7 @@ function App() {
                 structure: null,
                 structureTitle: "",
                 notice: "",
+                special: null,
               }
             : t,
         ),
@@ -967,6 +974,28 @@ function App() {
     [activeProfile],
   );
 
+  /** Open a special view in the active tab if it's blank, else a new tab. */
+  const openSpecial = useCallback(
+    (kind: "monitor" | "notify" | "er" | "diff", title: string) => {
+      const active = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
+      const id =
+        active && !active.sql.trim() && active.columns.length === 0 ? active.id : addTab();
+      updateTab(id, {
+        special: kind,
+        title,
+        customTitle: true,
+        columns: [],
+        rows: [],
+        plan: null,
+        structure: null,
+        notice: "",
+        error: "",
+        status: "",
+      });
+    },
+    [addTab, updateTab],
+  );
+
   const paletteItems = useMemo<PaletteItem[]>(() => {
     const items: PaletteItem[] = [
       {
@@ -1079,6 +1108,12 @@ function App() {
         { id: "rollback", label: "Rollback transaction", group: "cmd", run: () => txAction("rollback") },
       );
     }
+    items.push(
+      { id: "monitor", label: "Activity monitor", group: "server", hint: "pg_stat_activity + kill", run: () => openSpecial("monitor", "activity") },
+      { id: "diff", label: "Schema diff…", group: "server", hint: "compare two profiles", run: () => openSpecial("diff", "schema diff") },
+      { id: "notify", label: "LISTEN / NOTIFY console", group: "server", run: () => openSpecial("notify", "notify") },
+      { id: "er", label: "ER diagram", group: "server", hint: "FK graph, draggable", run: () => openSpecial("er", "ER diagram") },
+    );
     items.push({
       id: "new-window",
       label: "New window",
@@ -1137,6 +1172,7 @@ function App() {
     loadSnippets,
     exportTab,
     aiAsk,
+    openSpecial,
     aiExplore,
     aiOpenContext,
   ]);
@@ -1267,6 +1303,10 @@ function App() {
                     key={q.key}
                     className="item-row"
                     onClick={() => {
+                      if (q.key === "activity") {
+                        openSpecial("monitor", "activity");
+                        return;
+                      }
                       const id = activeTabIdRef.current;
                       updateTab(id, { title: q.title, customTitle: true });
                       runSql(q.sql, id);
@@ -1277,6 +1317,14 @@ function App() {
                     {q.label}
                   </div>
                 ))}
+                <div
+                  className="item-row"
+                  onClick={() => openSpecial("er", "ER diagram")}
+                  title="foreign-key graph"
+                >
+                  <span className="obj-icon server">⚙</span>
+                  ER diagram
+                </div>
                 <div className="schema-row server-head">Schemas</div>
                 {schemas.map(([schema, items]) => (
                   <div key={schema}>
@@ -1490,6 +1538,14 @@ function App() {
                 <div className="error-pane">{t.error}</div>
               ) : t.notice ? (
                 <pre className="notice-pane">{t.notice}</pre>
+              ) : t.special === "monitor" && conn ? (
+                <MonitorView connId={conn.connId} />
+              ) : t.special === "notify" && conn ? (
+                <NotifyView connId={conn.connId} />
+              ) : t.special === "er" && conn && activeProfile?.id ? (
+                <ERView connId={conn.connId} profileId={activeProfile.id} tables={catalog} />
+              ) : t.special === "diff" ? (
+                <DiffView profiles={profiles} defaultA={activeProfile?.id ?? null} />
               ) : t.structure ? (
                 <StructureView
                   table={t.structureTitle}

@@ -1691,6 +1691,292 @@ body.col-resizing {
   padding: 2px 0;
 }
 
+/* --- M3: monitor / notify / ER / diff ---------------------------------------- */
+
+.monitor-view,
+.diff-view {
+  flex: 1;
+  overflow: auto;
+  padding: 10px 14px;
+  font-size: 11.5px;
+}
+
+.monitor-toolbar,
+.diff-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 8px;
+}
+
+.monitor-toolbar .spacer {
+  flex: 1;
+}
+
+.monitor-table {
+  border-collapse: collapse;
+  min-width: 100%;
+}
+
+.monitor-table th,
+.monitor-table td {
+  padding: 3px 10px 3px 0;
+  border-bottom: 1px solid var(--border-faint);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.monitor-table th {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.mon-query {
+  max-width: 460px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: 10.5px var(--mono);
+  color: var(--text-dim);
+}
+
+.mon-app {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mon-dur {
+  font-variant-numeric: tabular-nums;
+  color: #e8c896;
+}
+
+.mon-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.act-badge {
+  padding: 0 7px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.act-active {
+  background: rgba(76, 175, 80, 0.2);
+  color: #8fd694;
+}
+
+.act-idletx {
+  background: rgba(217, 160, 95, 0.22);
+  color: #e8c896;
+}
+
+.act-idle {
+  background: var(--bg-header);
+  color: var(--text-dim);
+}
+
+/* notify console */
+
+.notify-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 10px 14px;
+  gap: 8px;
+}
+
+.notify-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.notify-row .filter {
+  margin: 0;
+}
+
+.notify-input {
+  width: 320px;
+}
+
+.notify-send-ch {
+  width: 140px;
+}
+
+.notify-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 10px;
+  border-radius: 10px;
+  background: rgba(76, 175, 80, 0.18);
+  color: #8fd694;
+  font: 600 11px var(--mono);
+}
+
+.notify-log {
+  flex: 1;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-faint);
+}
+
+.notify-event {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border-faint);
+  font-size: 11.5px;
+}
+
+.notify-ts {
+  color: var(--text-dim);
+  font: 10.5px var(--mono);
+}
+
+.notify-chan {
+  color: #6fb3e0;
+  font: 600 11px var(--mono);
+}
+
+.notify-payload {
+  flex: 1;
+  font: 11px var(--mono);
+  word-break: break-word;
+}
+
+.notify-pid {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+/* ER diagram */
+
+.er-view {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+}
+
+.er-empty {
+  position: sticky;
+  top: 0;
+  left: 0;
+  padding: 8px 14px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.er-canvas {
+  position: relative;
+}
+
+.er-edges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.er-edges line.er-line {
+  stroke: rgba(111, 179, 224, 0.5);
+  stroke-width: 1.5;
+  pointer-events: stroke;
+}
+
+.er-dot {
+  fill: #6fb3e0;
+}
+
+.er-node {
+  position: absolute;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
+}
+
+.er-node-head {
+  padding: 4px 10px;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border);
+  font: 600 11.5px var(--mono);
+  cursor: grab;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.er-node-head:active {
+  cursor: grabbing;
+}
+
+.er-col {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 10px;
+  height: 15px;
+  line-height: 15px;
+  font-size: 10px;
+}
+
+.er-col.fk .er-col-name {
+  color: #6fb3e0;
+  font-weight: 600;
+}
+
+.er-col-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.er-col-type {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.er-col.more {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+/* diff */
+
+.diff-summary {
+  padding: 4px 0 8px;
+  color: var(--text-dim);
+}
+
+.diff-table {
+  margin: 8px 0;
+}
+
+.diff-line {
+  font: 11px/1.6 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding-left: 12px;
+}
+
+.diff-line.plus {
+  color: #8fd694;
+}
+
+.diff-line.minus {
+  color: #f0928e;
+}
+
+.diff-line.tilde {
+  color: #e8c896;
+}
+
 /* --- bottom status bar ----------------------------------------------------- */
 
 .statusbar {

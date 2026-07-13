@@ -73,7 +73,7 @@ fn default_ssh_port() -> u16 {
 }
 
 /// Build the Postgres config (and tunnel, when SSH is enabled) for a profile.
-async fn prepare(
+pub(crate) async fn prepare(
     profile: &Profile,
     password: Option<String>,
 ) -> Result<(tokio_postgres::Config, Option<crate::tunnel::Tunnel>), String> {

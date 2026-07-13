@@ -1,7 +1,9 @@
 mod ai;
 mod db;
+mod diff;
 mod edits;
 mod history;
+mod notify;
 mod profiles;
 mod snippets;
 mod store;
@@ -44,6 +46,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(db::Connections::default())
+        .manage(notify::Listeners::default())
         .setup(|app| {
             let s = store::Store::init(app.handle())?;
             app.manage(s);
@@ -59,6 +62,13 @@ pub fn run() {
             db::run_query,
             db::exec_session,
             db::export_query,
+            db::activity_list,
+            db::kill_backend,
+            db::er_graph,
+            diff::schema_diff,
+            notify::listen_start,
+            notify::listen_stop,
+            notify::notify_send,
             db::set_read_only,
             db::close_session,
             db::explain_query,

@@ -102,13 +102,17 @@ Personal daily driver, macOS-first.
       (Anthropic API provider is the planned upgrade path)
 
 ### M3 — Postgres-native flex
-- [ ] pg_stat_activity monitor + kill backend
-- [ ] Table/index size + bloat stats
-- [ ] JSONB tree editor
-- [ ] Extension browser
-- [ ] LISTEN/NOTIFY console
-- [ ] Schema diff between two connections
-- [ ] ER diagram from FK graph
+- [x] pg_stat_activity monitor: live 2s refresh, state badges, running
+      durations, cancel/kill per session
+- [x] Table/index sizes (via \dt+ / \di and structure view; bloat TODO)
+- [x] JSONB tree editor (inspector + jsonb_set staging)
+- [x] Extension browser (\dx + sidebar Server section)
+- [x] LISTEN/NOTIFY console: dedicated listener session forwards events
+      live; subscribe chips, test sender
+- [x] Schema diff between two profiles: columns/indexes/constraints,
+      +/-/~ lines, ephemeral tunneled connections (diff logic unit-tested)
+- [x] ER diagram from FK graph: draggable nodes, FK-highlighted columns,
+      positions persisted per profile
 
 ## Dev
 
