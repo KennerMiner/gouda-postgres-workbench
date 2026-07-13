@@ -31,7 +31,7 @@ Personal daily driver, macOS-first.
 - [x] Live connection banner (server version, user, host, db)
 - [x] Connection manager: profiles in SQLite, passwords in macOS Keychain,
       manager modal, per-profile banner colors, auto-connect most recent,
-      'heroage local' seeded on first run
+      connection manager opens on first run
 - [x] SSL modes: disable / require (encrypted, no verify) / verify-full
       (system trust store) — sessions, cancel tokens, test included
 - [x] SSH tunnel support (russh): agent + key-file auth, known_hosts
@@ -121,5 +121,6 @@ npm run tauri dev        # run the app
 cd src-tauri && cargo test   # type-mapper test (needs local PG up)
 ```
 
-Local test DB: the `backend-postgres-1` Docker container
-(`postgres://heroage:heroage@localhost:5432/heroage`).
+Backend tests need a local Postgres; point `PSQLVIEWER_TEST_DSN` at any
+database you can create schemas in (default:
+`postgres://postgres:postgres@localhost:5432/postgres`).

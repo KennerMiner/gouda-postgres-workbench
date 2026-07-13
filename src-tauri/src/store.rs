@@ -61,22 +61,7 @@ impl Store {
              );",
         )?;
 
-        // First run: seed the local dev profile so the app stays a
-        // zero-config daily driver. Password goes to the Keychain.
-        let empty: bool =
-            conn.query_row("select count(*) = 0 from profiles", [], |r| r.get(0))?;
-        if empty {
-            conn.execute(
-                "insert into profiles (name, host, port, dbname, username, color)
-                 values ('heroage local', 'localhost', 5432, 'heroage', 'heroage', 'green')",
-                [],
-            )?;
-            let id: i64 = conn.query_row("select id from profiles", [], |r| r.get(0))?;
-            if let Err(e) = crate::profiles::set_password(id, "heroage") {
-                eprintln!("seed keychain write failed: {e}");
-            }
-        }
-
+        // First run: no profiles — the frontend opens the connection manager.
         Ok(Self(Mutex::new(conn)))
     }
 }

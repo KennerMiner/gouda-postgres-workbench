@@ -1238,7 +1238,7 @@ mod tests {
 
     fn test_dsn() -> String {
         std::env::var("PSQLVIEWER_TEST_DSN")
-            .unwrap_or_else(|_| "postgres://heroage:heroage@localhost:5432/heroage".into())
+            .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/postgres".into())
     }
 
     async fn test_client() -> Client {
@@ -1388,6 +1388,14 @@ mod tests {
     #[tokio::test]
     async fn object_listing_query_works() {
         let client = test_client().await;
+        // Self-contained fixture so the test passes on an empty database.
+        client
+            .batch_execute(
+                "create schema if not exists psqlviewer_test;
+                 create table if not exists psqlviewer_test.listing_probe(id int);",
+            )
+            .await
+            .expect("fixture");
         let rows = client
             .query(
                 r#"select n.nspname, c.relname
@@ -1399,10 +1407,16 @@ mod tests {
             )
             .await
             .expect("query");
-        assert!(!rows.is_empty(), "dev DB should have at least one table");
+        assert!(rows.iter().any(|r| {
+            let t: String = r.get(1);
+            t == "listing_probe"
+        }));
         assert!(rows.iter().all(|r| {
             let s: String = r.get(0);
             !s.starts_with("pg_")
         }));
+        let _ = client
+            .batch_execute("drop schema psqlviewer_test cascade")
+            .await;
     }
 }

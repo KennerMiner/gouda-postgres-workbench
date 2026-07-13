@@ -28,9 +28,6 @@
   "bundle": {
     "active": true,
     "targets": "app",
-    "macOS": {
-      "signingIdentity": "Apple Development: Kenneth Miner (4S2CB3QTH3)"
-    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
