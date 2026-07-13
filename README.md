@@ -3,6 +3,8 @@
 A Postgres workbench for macOS — fast, keyboard-first. Tauri v2 + Rust + React;
 ~18 MB app, results stream as they arrive.
 
+**→ [kennerminer.github.io/gouda-postgres-workbench](https://kennerminer.github.io/gouda-postgres-workbench/)**
+
 ![Query editor and results grid](docs/screenshots/grid.png)
 
 ## Features
