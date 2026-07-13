@@ -119,8 +119,7 @@ pub(crate) async fn prepare(
     Ok((config, tunnel))
 }
 
-#[tauri::command]
-pub fn profiles_list(store: State<'_, Store>) -> Result<Vec<Profile>, String> {
+pub(crate) fn profiles_list_inner(store: &Store) -> Result<Vec<Profile>, String> {
     let conn = store.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
@@ -156,11 +155,13 @@ pub fn profiles_list(store: State<'_, Store>) -> Result<Vec<Profile>, String> {
     Ok(rows)
 }
 
-/// Insert or update a profile. `password: Some(_)` writes the Keychain;
-/// `None` leaves the stored secret untouched (edit-without-retyping).
 #[tauri::command]
-pub fn profile_save(
-    store: State<'_, Store>,
+pub fn profiles_list(store: State<'_, Store>) -> Result<Vec<Profile>, String> {
+    profiles_list_inner(&store)
+}
+
+pub(crate) fn profile_save_inner(
+    store: &Store,
     profile: Profile,
     password: Option<String>,
 ) -> Result<i64, String> {
@@ -219,10 +220,22 @@ pub fn profile_save(
             conn.last_insert_rowid()
         }
     };
+    drop(conn);
     if let Some(pw) = password {
         set_password(id, &pw)?;
     }
     Ok(id)
+}
+
+/// Insert or update a profile. `password: Some(_)` writes the Keychain;
+/// `None` leaves the stored secret untouched (edit-without-retyping).
+#[tauri::command]
+pub fn profile_save(
+    store: State<'_, Store>,
+    profile: Profile,
+    password: Option<String>,
+) -> Result<i64, String> {
+    profile_save_inner(&store, profile, password)
 }
 
 #[tauri::command]
@@ -332,4 +345,84 @@ pub async fn connect_profile(
     )
     .map_err(|e| e.to_string())?;
     Ok(info)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::temp_store;
+
+    fn full_profile() -> Profile {
+        Profile {
+            id: None,
+            name: "rt".into(),
+            host: "db.example.com".into(),
+            port: 5433,
+            dbname: "appdb".into(),
+            username: "svc".into(),
+            color: "red".into(),
+            last_used_at: None,
+            ssh_enabled: true,
+            ssh_host: "bastion.example.com".into(),
+            ssh_port: 2222,
+            ssh_user: "jump".into(),
+            ssh_key_path: "~/.ssh/id_test".into(),
+            read_only: true,
+            ssl_mode: "require".into(),
+        }
+    }
+
+    fn assert_matches(a: &Profile, b: &Profile) {
+        assert_eq!(a.name, b.name);
+        assert_eq!(a.host, b.host);
+        assert_eq!(a.port, b.port);
+        assert_eq!(a.dbname, b.dbname);
+        assert_eq!(a.username, b.username);
+        assert_eq!(a.color, b.color);
+        assert_eq!(a.ssh_enabled, b.ssh_enabled);
+        assert_eq!(a.ssh_host, b.ssh_host);
+        assert_eq!(a.ssh_port, b.ssh_port);
+        assert_eq!(a.ssh_user, b.ssh_user);
+        assert_eq!(a.ssh_key_path, b.ssh_key_path);
+        assert_eq!(a.read_only, b.read_only);
+        assert_eq!(a.ssl_mode, b.ssl_mode);
+    }
+
+    /// Every profile field must survive insert → list → point-load → update →
+    /// reload. This is the regression net for SELECT/mapper/INSERT column
+    /// drift (the "Invalid column index" class of bug).
+    #[test]
+    fn profile_roundtrip_every_field() {
+        let store = temp_store();
+        let p = full_profile();
+        let id = profile_save_inner(&store, p.clone(), None).expect("insert");
+
+        let list = profiles_list_inner(&store).expect("list");
+        assert_eq!(list.len(), 1);
+        assert_matches(&list[0], &p);
+        assert_eq!(list[0].id, Some(id));
+
+        let (loaded, _password) = load_profile_with_password(&store, id).expect("load");
+        assert_matches(&loaded, &p);
+        // NB: no assertion on the password — the Keychain is machine-global
+        // and keyed by profile id, so a developer's real entries may collide
+        // with temp-store ids. The load path is exercised either way.
+
+        // Update path: change every mutable field and round-trip again.
+        let mut p2 = full_profile();
+        p2.id = Some(id);
+        p2.name = "rt2".into();
+        p2.host = "other.example.com".into();
+        p2.port = 6432;
+        p2.color = "blue".into();
+        p2.ssh_enabled = false;
+        p2.read_only = false;
+        p2.ssl_mode = "verify-full".into();
+        profile_save_inner(&store, p2.clone(), None).expect("update");
+
+        let (reloaded, _) = load_profile_with_password(&store, id).expect("reload");
+        assert_matches(&reloaded, &p2);
+        assert_eq!(profiles_list_inner(&store).expect("list2").len(), 1);
+    }
 }

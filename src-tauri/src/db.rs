@@ -1249,6 +1249,17 @@ mod tests {
         client
     }
 
+    #[test]
+    fn ssl_choice_parses() {
+        assert!(matches!(SslChoice::parse("disable"), SslChoice::Disable));
+        assert!(matches!(SslChoice::parse("require"), SslChoice::Require));
+        assert!(matches!(SslChoice::parse("verify-full"), SslChoice::VerifyFull));
+        // unknown/legacy values fail closed to plaintext-off? No: to Disable,
+        // matching the historical default for existing profiles.
+        assert!(matches!(SslChoice::parse(""), SslChoice::Disable));
+        assert!(matches!(SslChoice::parse("prefer"), SslChoice::Disable));
+    }
+
     /// Exercises the type mapper against a live Postgres. Requires the local
     /// dev DB (docker: backend-postgres-1) to be up.
     #[tokio::test]

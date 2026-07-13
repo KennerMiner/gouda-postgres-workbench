@@ -52,9 +52,8 @@ pub struct HistoryEntry {
     error: Option<String>,
 }
 
-#[tauri::command]
-pub fn history_list(
-    store: State<'_, Store>,
+pub(crate) fn history_list_inner(
+    store: &Store,
     search: Option<String>,
     limit: Option<u32>,
 ) -> Result<Vec<HistoryEntry>, String> {
@@ -91,9 +90,45 @@ pub fn history_list(
 }
 
 #[tauri::command]
+pub fn history_list(
+    store: State<'_, Store>,
+    search: Option<String>,
+    limit: Option<u32>,
+) -> Result<Vec<HistoryEntry>, String> {
+    history_list_inner(&store, search, limit)
+}
+
+#[tauri::command]
 pub fn history_clear(store: State<'_, Store>) -> Result<(), String> {
     let conn = store.0.lock().map_err(|e| e.to_string())?;
     conn.execute("delete from history", [])
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::temp_store;
+
+    #[test]
+    fn record_list_search() {
+        let store = temp_store();
+        record(&store, "a@x/db", "select 1;", 1000, Some(5), Some(1), None);
+        record(&store, "a@x/db", "update t set x = 2;", 2000, Some(9), None, Some("boom"));
+
+        let all = history_list_inner(&store, None, None).unwrap();
+        assert_eq!(all.len(), 2);
+        // newest first
+        assert!(all[0].sql.starts_with("update"));
+        assert_eq!(all[0].error.as_deref(), Some("boom"));
+
+        let hits = history_list_inner(&store, Some("select".into()), None).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].row_count, Some(1));
+
+        let none = history_list_inner(&store, Some("zzz".into()), None).unwrap();
+        assert!(none.is_empty());
+    }
 }

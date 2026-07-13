@@ -14,6 +14,7 @@ import DiffView from "./DiffView";
 import { splitStatements } from "./sqlStatements";
 import { buildNamespace, type CatalogTable } from "./sqlNamespace";
 import { META_HELP, SERVER_QUERIES, translateMeta } from "./metaCommands";
+import { confirmDangerous } from "./sqlSafety";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { SQLNamespace } from "@codemirror/lang-sql";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -92,23 +93,6 @@ function tabTitle(sql: string, fallback: string): string {
   const m = /(?:from|into|update|table)\s+([\w".]+)/i.exec(sql);
   if (!m) return fallback;
   return m[1].replace(/"/g, "").split(".").pop() || fallback;
-}
-
-/** Warning text for statements that deserve a confirm; null = run freely. */
-function confirmDangerous(stmt: string): string | null {
-  const cleaned = stmt
-    .replace(/'(?:[^']|'')*'/g, "''")
-    .replace(/--[^\n]*/g, "")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .toLowerCase();
-  const head = cleaned.trimStart();
-  if (/^truncate\b/.test(head)) return "TRUNCATE removes ALL rows from the table.\n\nRun it?";
-  if (/^drop\b/.test(head)) return "DROP is irreversible.\n\nRun it?";
-  if (/^(update|delete)\b/.test(head) && !/\bwhere\b/.test(cleaned)) {
-    const verb = head.startsWith("update") ? "UPDATE" : "DELETE";
-    return `This ${verb} has no WHERE clause — it affects EVERY row in the table.\n\nRun it?`;
-  }
-  return null;
 }
 
 function blankTab(id: number, sql = ""): QueryTab {

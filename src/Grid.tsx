@@ -4,6 +4,7 @@ import Inspector from "./Inspector";
 import { copyText } from "./clipboard";
 import { applyJsonSets, type JsonSetStage } from "./jsonSets";
 import { rowsToInsert, rowsToTsv } from "./rowCopy";
+import { computeOrder, type SortSpec } from "./gridSort";
 import { toCsv } from "./export";
 import type { Path } from "./JsonTree";
 
@@ -102,7 +103,7 @@ export default function Grid({
   const [editing, setEditing] = useState<Sel | null>(null);
   const [editText, setEditText] = useState("");
   const [preview, setPreview] = useState<string[] | null>(null);
-  const [sort, setSort] = useState<{ c: number; dir: 1 | -1 } | null>(null);
+  const [sort, setSort] = useState<SortSpec>(null);
   // Selected SOURCE row indices + the display-index anchor for shift ranges.
   const [rowSel, setRowSel] = useState<Set<number>>(new Set());
   const rowAnchor = useRef<number | null>(null);
@@ -131,27 +132,7 @@ export default function Grid({
   // Display order: sorting permutes an index array; edits/deletes/selection
   // data stay keyed to SOURCE row indices. Pending insert rows always render
   // after all real rows and are unaffected by sort.
-  const order = useMemo(() => {
-    const idx = rows.map((_, i) => i);
-    if (!sort) return idx;
-    const { c, dir } = sort;
-    const numeric = NUMERIC_TYPES.has(columns[c]?.typeName ?? "");
-    idx.sort((a, b) => {
-      const va = rows[a][c];
-      const vb = rows[b][c];
-      if (va === null && vb === null) return 0;
-      if (va === null) return 1; // nulls last regardless of direction
-      if (vb === null) return -1;
-      let cmp: number;
-      if (numeric || (typeof va === "number" && typeof vb === "number")) {
-        cmp = Number(va) - Number(vb);
-      } else {
-        cmp = cellText(va).localeCompare(cellText(vb));
-      }
-      return cmp * dir;
-    });
-    return idx;
-  }, [rows, sort, columns]);
+  const order = useMemo(() => computeOrder(rows, sort, columns), [rows, sort, columns]);
 
   /** Display row -> source row (insert rows map to themselves). */
   const toSrc = (d: number) => (d >= rows.length ? d : order[d]);

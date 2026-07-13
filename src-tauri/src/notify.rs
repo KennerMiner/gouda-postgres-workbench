@@ -158,3 +158,22 @@ pub async fn notify_send(
         .map(|_| ())
         .map_err(|e| crate::db::pg_err(&e))
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::valid_channel;
+
+    #[test]
+    fn channel_validation() {
+        assert!(valid_channel("cache_invalidation"));
+        assert!(valid_channel("_private"));
+        assert!(valid_channel("ch4nnel"));
+        assert!(!valid_channel(""));
+        assert!(!valid_channel("1starts_with_digit"));
+        assert!(!valid_channel("has-dash"));
+        assert!(!valid_channel("has space"));
+        assert!(!valid_channel("quote\"inject"));
+        assert!(!valid_channel(&"x".repeat(64)));
+    }
+}
