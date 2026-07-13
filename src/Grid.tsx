@@ -91,6 +91,8 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh, o
   const [editing, setEditing] = useState<Sel | null>(null);
   const [editText, setEditText] = useState("");
   const [preview, setPreview] = useState<string[] | null>(null);
+  const [sort, setSort] = useState<{ c: number; dir: 1 | -1 } | null>(null);
+  const [widthOverrides, setWidthOverrides] = useState<Map<number, number>>(new Map());
   const [applyErr, setApplyErr] = useState("");
   const [applyBusy, setApplyBusy] = useState(false);
 
@@ -104,10 +106,45 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh, o
     setEditing(null);
     setPreview(null);
     setApplyErr("");
+    setSort(null);
+    setWidthOverrides(new Map());
   }, [columns]);
 
   const total = rows.length + inserts.length;
   const isInsertRow = (r: number) => r >= rows.length;
+
+  // Display order: sorting permutes an index array; edits/deletes/selection
+  // data stay keyed to SOURCE row indices. Pending insert rows always render
+  // after all real rows and are unaffected by sort.
+  const order = useMemo(() => {
+    const idx = rows.map((_, i) => i);
+    if (!sort) return idx;
+    const { c, dir } = sort;
+    const numeric = NUMERIC_TYPES.has(columns[c]?.typeName ?? "");
+    idx.sort((a, b) => {
+      const va = rows[a][c];
+      const vb = rows[b][c];
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1; // nulls last regardless of direction
+      if (vb === null) return -1;
+      let cmp: number;
+      if (numeric || (typeof va === "number" && typeof vb === "number")) {
+        cmp = Number(va) - Number(vb);
+      } else {
+        cmp = cellText(va).localeCompare(cellText(vb));
+      }
+      return cmp * dir;
+    });
+    return idx;
+  }, [rows, sort, columns]);
+
+  /** Display row -> source row (insert rows map to themselves). */
+  const toSrc = (d: number) => (d >= rows.length ? d : order[d]);
+
+  const cycleSort = (c: number) =>
+    setSort((prev) =>
+      prev?.c !== c ? { c, dir: 1 } : prev.dir === 1 ? { c, dir: -1 } : null,
+    );
 
   const virtualizer = useVirtualizer({
     count: total,
@@ -127,8 +164,29 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh, o
         if (len > w[c]) w[c] = Math.min(len, 70);
       }
     }
-    return w.map((chars) => Math.max(MIN_COL, Math.min(MAX_COL, chars * CHAR_W + 21)));
-  }, [columns, rows]);
+    return w.map((chars, i) =>
+      widthOverrides.get(i) ?? Math.max(MIN_COL, Math.min(MAX_COL, chars * CHAR_W + 21)),
+    );
+  }, [columns, rows, widthOverrides]);
+
+  const startResize = (e: React.MouseEvent, c: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = widths[c];
+    const move = (ev: MouseEvent) =>
+      setWidthOverrides((prev) =>
+        new Map(prev).set(c, Math.max(40, Math.min(900, startW + ev.clientX - startX))),
+      );
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      document.body.classList.remove("col-resizing");
+    };
+    document.body.classList.add("col-resizing");
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
 
   const gutterW = Math.max(40, String(total).length * 8 + 18);
   const template = `${gutterW}px ${widths.map((w) => `${w}px`).join(" ")}`;
@@ -257,8 +315,8 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh, o
       }
       const v = rows[r][c];
       // JSON/object cells edit in the inspector, not a 24px input.
+      // (Callers own selection state — r here is a SOURCE index, sel is display.)
       if (typeof v === "object" && v !== null) {
-        setSel({ r, c });
         setInspecting(true);
         return;
       }
@@ -395,9 +453,10 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh, o
       case "Enter":
         if (sel) {
           e.preventDefault();
-          const v = isInsertRow(sel.r) ? undefined : rows[sel.r][sel.c];
+          const src = toSrc(sel.r);
+          const v = isInsertRow(src) ? undefined : rows[src][sel.c];
           if (canEditCol(sel.c) && !(typeof v === "object" && v !== null)) {
-            startEdit(sel.r, sel.c);
+            startEdit(src, sel.c);
           } else {
             setInspecting(true);
           }
@@ -421,14 +480,14 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh, o
             removeInsertRow(sel.r - rows.length);
             setSel(null);
           } else if (editable) {
-            toggleDelete(sel.r);
+            toggleDelete(toSrc(sel.r));
           }
         }
         break;
       case "c":
         if ((e.metaKey || e.ctrlKey) && sel) {
           e.preventDefault();
-          copyText(cellText(displayValue(sel.r, sel.c) ?? null));
+          copyText(cellText(displayValue(toSrc(sel.r), sel.c) ?? null));
         }
         break;
     }
@@ -449,7 +508,7 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh, o
     }
   };
 
-  const selValue = sel && !isInsertRow(sel.r) ? displayValue(sel.r, sel.c) : undefined;
+  const selValue = sel && !isInsertRow(sel.r) ? displayValue(toSrc(sel.r), sel.c) : undefined;
 
   const renderCell = (r: number, c: number) => {
     if (editing && editing.r === r && editing.c === c) {
@@ -490,16 +549,36 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh, o
           <div className="grid-header" style={{ gridTemplateColumns: template, width: totalW }}>
             <div className="gc gutter" />
             {columns.map((c, i) => (
-              <div key={i} className={`gc head${numClass(i)}`} title={c.typeName}>
+              <div
+                key={i}
+                className={`gc head${numClass(i)}`}
+                title={`${c.typeName} — click to sort`}
+                onClick={() => cycleSort(i)}
+              >
                 {c.name}
+                {sort?.c === i && <span className="sort-arrow">{sort.dir === 1 ? "▲" : "▼"}</span>}
+                <span
+                  className="col-resize-handle"
+                  onMouseDown={(e) => startResize(e, i)}
+                  onClick={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    setWidthOverrides((prev) => {
+                      const next = new Map(prev);
+                      next.delete(i);
+                      return next;
+                    });
+                  }}
+                />
               </div>
             ))}
           </div>
           <div style={{ height: virtualizer.getTotalSize(), width: totalW, position: "relative" }}>
             {virtualizer.getVirtualItems().map((vr) => {
-              const r = vr.index;
-              const insert = isInsertRow(r);
-              const deleted = !insert && deletes.has(r);
+              const d = vr.index; // display position
+              const src = toSrc(d); // source row (data domain)
+              const insert = isInsertRow(src);
+              const deleted = !insert && deletes.has(src);
               return (
                 <div
                   key={vr.key}
@@ -509,21 +588,21 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh, o
                     transform: `translateY(${vr.start}px)`,
                   }}
                 >
-                  <div className="gc gutter">{insert ? "+" : r + 1}</div>
+                  <div className="gc gutter">{insert ? "+" : d + 1}</div>
                   {columns.map((_, ci) => (
                     <div
                       key={ci}
                       className={`gc${numClass(ci)}${
-                        sel && sel.r === r && sel.c === ci ? " sel" : ""
-                      }${!insert && edits.has(stagedKey(r, ci)) ? " staged" : ""}`}
-                      onMouseDown={() => setSel({ r, c: ci })}
+                        sel && sel.r === d && sel.c === ci ? " sel" : ""
+                      }${!insert && edits.has(stagedKey(src, ci)) ? " staged" : ""}`}
+                      onMouseDown={() => setSel({ r: d, c: ci })}
                       onDoubleClick={() => {
-                        setSel({ r, c: ci });
-                        if (canEditCol(ci)) startEdit(r, ci);
+                        setSel({ r: d, c: ci });
+                        if (canEditCol(ci)) startEdit(src, ci);
                         else if (!insert) setInspecting(true);
                       }}
                     >
-                      {renderCell(r, ci)}
+                      {renderCell(src, ci)}
                     </div>
                   ))}
                 </div>
@@ -538,13 +617,13 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh, o
             value={selValue}
             editable={canEditCol(sel.c)}
             onStage={(text) => {
-              stage(sel.r, sel.c, text);
+              stage(toSrc(sel.r), sel.c, text);
               setInspecting(false);
             }}
             onStageJsonSet={
               canEditCol(sel.c) &&
               (columns[sel.c].typeName === "jsonb" || columns[sel.c].typeName === "json")
-                ? (path, value) => stageJsonSet(sel.r, sel.c, path, value)
+                ? (path, value) => stageJsonSet(toSrc(sel.r), sel.c, path, value)
                 : undefined
             }
             onClose={() => setInspecting(false)}

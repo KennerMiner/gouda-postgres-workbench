@@ -22,6 +22,10 @@ use tokio_postgres::{types::ToSql, Client, NoTls, Row};
 /// streams in rather than materializing entirely before the first paint.
 const BATCH: usize = 500;
 
+/// Default cap on rows delivered to the UI — a guard against `select *` on a
+/// 10M-row table eating all memory. The frontend flags truncation.
+const MAX_ROWS_DEFAULT: usize = 50_000;
+
 /// An open client plus a human-readable identity (`user@host/db`) used to
 /// label history entries. Holds its SSH tunnel (if any) so the tunnel lives
 /// exactly as long as the connection.
@@ -213,7 +217,7 @@ pub enum QueryEvent {
         editable: Option<EditableInfo>,
     },
     Rows { rows: Vec<Vec<J>> },
-    Done { row_count: usize, elapsed_ms: u64 },
+    Done { row_count: usize, elapsed_ms: u64, truncated: bool },
     Error { message: String },
 }
 
@@ -499,6 +503,7 @@ pub async fn run_query(
     history: State<'_, crate::store::Store>,
     conn_id: u32,
     sql: String,
+    max_rows: Option<u32>,
     on_event: Channel<QueryEvent>,
 ) -> Result<(), String> {
     let start = std::time::Instant::now();
@@ -512,7 +517,7 @@ pub async fn run_query(
     };
     let client = &entry.client;
 
-    let result: Result<usize, String> = async {
+    let result: Result<(usize, bool), String> = async {
         let stmt = client.prepare(&sql).await.map_err(|e| pg_err(&e))?;
 
         let columns: Vec<ColumnMeta> = stmt
@@ -537,8 +542,10 @@ pub async fn run_query(
             .map_err(|e| pg_err(&e))?;
         pin_mut!(stream);
 
+        let cap = max_rows.map(|n| n as usize).unwrap_or(MAX_ROWS_DEFAULT);
         let mut batch: Vec<Vec<J>> = Vec::with_capacity(BATCH);
         let mut total = 0usize;
+        let mut truncated = false;
         while let Some(item) = stream.next().await {
             let row = item.map_err(|e| pg_err(&e))?;
             let mut out = Vec::with_capacity(ncols);
@@ -552,19 +559,29 @@ pub async fn run_query(
                     .send(QueryEvent::Rows { rows: std::mem::take(&mut batch) })
                     .map_err(|e| e.to_string())?;
             }
+            if total >= cap {
+                truncated = true;
+                // Stop the server-side work too; the connection survives a
+                // cancel and drains quickly.
+                let token = client.cancel_token();
+                tokio::spawn(async move {
+                    let _ = token.cancel_query(NoTls).await;
+                });
+                break;
+            }
         }
         if !batch.is_empty() {
             on_event
                 .send(QueryEvent::Rows { rows: batch })
                 .map_err(|e| e.to_string())?;
         }
-        Ok(total)
+        Ok((total, truncated))
     }
     .await;
 
     let elapsed = start.elapsed().as_millis() as i64;
     match result {
-        Ok(total) => {
+        Ok((total, truncated)) => {
             // Record BEFORE emitting Done: the frontend refreshes its history
             // list on Done, so the row must already be committed.
             crate::history::record(
@@ -579,6 +596,7 @@ pub async fn run_query(
             let _ = on_event.send(QueryEvent::Done {
                 row_count: total,
                 elapsed_ms: elapsed as u64,
+                truncated,
             });
         }
         Err(message) => {

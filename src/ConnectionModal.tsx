@@ -44,7 +44,7 @@ type Props = {
   /** Persists the profile and returns it with its id filled in. */
   onSave: (profile: Profile, password: string | null) => Promise<Profile>;
   onDelete: (profileId: number) => Promise<void>;
-  onConnect: (profile: Profile) => Promise<void>;
+  onConnect: (profile: Profile) => Promise<unknown>;
   /** Tries the form values without switching connection; resolves to server version. */
   onTest: (profile: Profile, password: string | null) => Promise<string>;
   onClose: () => void;
@@ -84,7 +84,7 @@ export default function ConnectionModal({
     setTestResult(null); // stale test verdicts mislead
   };
 
-  const guard = async (fn: () => Promise<void>) => {
+  const guard = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     setErr("");
     try {

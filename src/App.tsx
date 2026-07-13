@@ -16,7 +16,7 @@ import "./App.css";
 type QueryEvent =
   | { kind: "meta"; columns: ColumnMeta[]; editable: EditableInfo | null }
   | { kind: "rows"; rows: unknown[][] }
-  | { kind: "done"; rowCount: number; elapsedMs: number }
+  | { kind: "done"; rowCount: number; elapsedMs: number; truncated?: boolean }
   | { kind: "error"; message: string };
 
 type ConnInfo = { connId: number; serverVersion: string; user: string; database: string };
@@ -79,6 +79,23 @@ function tabTitle(sql: string, fallback: string): string {
   return m[1].replace(/"/g, "").split(".").pop() || fallback;
 }
 
+/** Warning text for statements that deserve a confirm; null = run freely. */
+function confirmDangerous(stmt: string): string | null {
+  const cleaned = stmt
+    .replace(/'(?:[^']|'')*'/g, "''")
+    .replace(/--[^\n]*/g, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .toLowerCase();
+  const head = cleaned.trimStart();
+  if (/^truncate\b/.test(head)) return "TRUNCATE removes ALL rows from the table.\n\nRun it?";
+  if (/^drop\b/.test(head)) return "DROP is irreversible.\n\nRun it?";
+  if (/^(update|delete)\b/.test(head) && !/\bwhere\b/.test(cleaned)) {
+    const verb = head.startsWith("update") ? "UPDATE" : "DELETE";
+    return `This ${verb} has no WHERE clause — it affects EVERY row in the table.\n\nRun it?`;
+  }
+  return null;
+}
+
 function blankTab(id: number, sql = ""): QueryTab {
   return {
     id,
@@ -99,8 +116,8 @@ function blankTab(id: number, sql = ""): QueryTab {
 function App() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [activeProfile, setActiveProfile] = useState<Profile | null>(null);
+  const activeProfileRef = useRef<Profile | null>(null);
   const [showConnections, setShowConnections] = useState(false);
-  const [conn, setConn] = useState<ConnInfo | null>(null);
   const [connError, setConnError] = useState("");
   const [objects, setObjects] = useState<DbObject[]>([]);
   const [schemaNs, setSchemaNs] = useState<SQLNamespace | null>(null);
@@ -124,6 +141,9 @@ function App() {
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
   const activeTabIdRef = useRef(activeTabId);
   activeTabIdRef.current = activeTabId;
+  const [conn, setConn] = useState<ConnInfo | null>(null);
+  const connRef = useRef(conn);
+  connRef.current = conn;
 
   const updateTab = useCallback((id: number, patch: Partial<QueryTab>) => {
     setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -145,6 +165,7 @@ function App() {
       const info = await invoke<ConnInfo>("connect_profile", { profileId: p.id });
       setConn(info);
       setActiveProfile(p);
+      activeProfileRef.current = p;
       setTx("none");
       setReadOnly(p.readOnly);
       setShowConnections(false);
@@ -157,6 +178,7 @@ function App() {
       } catch {
         // completions just stay keyword-only
       }
+      return info;
     } catch (e) {
       setConnError(String(e));
       throw e;
@@ -269,9 +291,19 @@ function App() {
   }, [sideTab, loadHistory]);
 
   const runSql = useCallback(
-    (text: string, tabId?: number): Promise<boolean> => {
-      if (!conn) return Promise.resolve(false);
+    (
+      text: string,
+      tabId?: number,
+      opts?: { retried?: boolean; connId?: number },
+    ): Promise<boolean> => {
+      const connId = opts?.connId ?? connRef.current?.connId;
+      if (!connId) return Promise.resolve(false);
       const id = tabId ?? activeTabIdRef.current;
+      const warning = confirmDangerous(text);
+      if (warning && !window.confirm(warning)) {
+        updateTab(id, { status: "cancelled" });
+        return Promise.resolve(false);
+      }
       rowBuffers.current.set(id, []);
       setTabs((ts) =>
         ts.map((t) =>
@@ -312,29 +344,52 @@ function App() {
             // the rest of the handler (learned the hard way — see git log).
             const n = ev.rowCount ?? 0;
             updateTab(id, {
-              status: `${n.toLocaleString()} row${n === 1 ? "" : "s"} in ${ev.elapsedMs ?? "?"} ms`,
+              status: ev.truncated
+                ? `first ${n.toLocaleString()} rows (capped — refine the query or export) in ${ev.elapsedMs ?? "?"} ms`
+                : `${n.toLocaleString()} row${n === 1 ? "" : "s"} in ${ev.elapsedMs ?? "?"} ms`,
               running: false,
             });
             loadHistoryRef.current();
             resolve(true);
             break;
           }
-          case "error":
+          case "error": {
+            const dead =
+              /connection closed|no connection #|communicating with the server|broken pipe|connection reset|unexpected eof/i.test(
+                ev.message,
+              );
+            const prof = activeProfileRef.current;
+            if (dead && !opts?.retried && prof) {
+              // Laptop-sleep resilience: reconnect the profile and retry once.
+              updateTab(id, { status: "connection lost — reconnecting…" });
+              connectProfile(prof)
+                .then((info) => runSql(text, id, { retried: true, connId: info.connId }))
+                .then((ok) => resolve(ok))
+                .catch(() => {
+                  updateTab(id, {
+                    error: `${ev.message}\n\n(automatic reconnect failed)`,
+                    running: false,
+                  });
+                  resolve(false);
+                });
+              break;
+            }
             updateTab(id, { error: ev.message, running: false });
             if (txRef.current === "open") setTx("aborted");
             loadHistoryRef.current();
             resolve(false);
             break;
+          }
         }
       };
 
-      invoke("run_query", { connId: conn.connId, sql: text, onEvent: channel }).catch((e) => {
+      invoke("run_query", { connId, sql: text, onEvent: channel }).catch((e) => {
         updateTab(id, { error: String(e), running: false });
         resolve(false);
       });
       });
     },
-    [conn, updateTab],
+    [connectProfile, updateTab],
   );
 
   /** Run a whole script: statements sequentially, stopping at the first failure. */
@@ -354,7 +409,7 @@ function App() {
         if (!ok) {
           setTabs((ts) =>
             ts.map((t) =>
-              t.id === id
+              t.id === id && t.error
                 ? { ...t, error: `statement ${i + 1} of ${stmts.length} failed:\n\n${t.error}` }
                 : t,
             ),

@@ -80,6 +80,10 @@ Personal daily driver, macOS-first.
 - [ ] Light theme
 
 ### Extras (landed along the way)
+- [x] Must-have hardening: 50k row cap w/ server-side cancel + truncated
+      status; auto-reconnect-and-retry on dead connections (laptop sleep);
+      confirm on UPDATE/DELETE-without-WHERE and TRUNCATE/DROP; column
+      header sort (source-index-safe with staged edits) + drag resize
 - [x] Session persistence: tabs restore across launches (app_state KV)
 - [x] Saved queries: snippets + sidebar Queries tab + palette flows
 - [x] Ask AI (⌘K): claude CLI generates a commented query into a new tab —
