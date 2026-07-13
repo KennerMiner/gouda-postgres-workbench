@@ -387,6 +387,21 @@ body,
   }
 }
 
+.tab.dragging {
+  opacity: 0.45;
+}
+
+.tab-rename {
+  width: 110px;
+  padding: 1px 5px;
+  border: 1px solid var(--green);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11px;
+  outline: none;
+}
+
 .tab-close {
   margin-left: auto;
   padding: 0 4px;

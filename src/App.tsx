@@ -28,6 +28,8 @@ type HistoryEntry = {
 type QueryTab = {
   id: number;
   title: string;
+  /** User renamed the tab — auto-titling from queries stops. */
+  customTitle: boolean;
   sql: string;
   lastSql: string;
   columns: ColumnMeta[];
@@ -72,6 +74,7 @@ function blankTab(id: number, sql = ""): QueryTab {
   return {
     id,
     title: `Query ${id}`,
+    customTitle: false,
     sql,
     lastSql: "",
     columns: [],
@@ -209,7 +212,7 @@ function App() {
           t.id === id
             ? {
                 ...t,
-                title: tabTitle(text, t.title),
+                title: t.customTitle ? t.title : tabTitle(text, t.title),
                 lastSql: text,
                 columns: [],
                 rows: [],
@@ -279,6 +282,41 @@ function App() {
     setTabs((ts) => [...ts, blankTab(id, sql)]);
     setActiveTabId(id);
     return id;
+  }, []);
+
+  const [renaming, setRenaming] = useState<{ id: number; text: string } | null>(null);
+  const [dragTabId, setDragTabId] = useState<number | null>(null);
+
+  const commitRename = useCallback(() => {
+    if (!renaming) return;
+    const text = renaming.text.trim();
+    setTabs((ts) =>
+      ts.map((t) => {
+        if (t.id !== renaming.id) return t;
+        // Empty name reverts to auto-titling.
+        return text
+          ? { ...t, title: text, customTitle: true }
+          : {
+              ...t,
+              title: tabTitle(t.lastSql || t.sql, `Query ${t.id}`),
+              customTitle: false,
+            };
+      }),
+    );
+    setRenaming(null);
+  }, [renaming]);
+
+  /** Live-reorder while dragging: move the dragged tab to the hovered slot. */
+  const moveTab = useCallback((fromId: number, toId: number) => {
+    setTabs((ts) => {
+      const from = ts.findIndex((t) => t.id === fromId);
+      const to = ts.findIndex((t) => t.id === toId);
+      if (from < 0 || to < 0 || from === to) return ts;
+      const next = [...ts];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
   }, []);
 
   const closeTab = useCallback(
@@ -506,13 +544,45 @@ function App() {
             {tabs.map((t) => (
               <div
                 key={t.id}
-                className={`tab ${t.id === activeTabId ? "active" : ""}`}
+                className={`tab ${t.id === activeTabId ? "active" : ""} ${
+                  t.id === dragTabId ? "dragging" : ""
+                }`}
                 onClick={() => setActiveTabId(t.id)}
+                onDoubleClick={() => setRenaming({ id: t.id, text: t.title })}
                 title={t.lastSql || t.sql}
+                draggable={renaming?.id !== t.id}
+                onDragStart={(e) => {
+                  setDragTabId(t.id);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragEnd={() => setDragTabId(null)}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (dragTabId !== null && dragTabId !== t.id) moveTab(dragTabId, t.id);
+                }}
+                onDrop={(e) => e.preventDefault()}
               >
                 {t.running && <span className="tab-spinner">●</span>}
-                <span className="tab-title">{t.title}</span>
-                {tabs.length > 1 && (
+                {renaming?.id === t.id ? (
+                  <input
+                    className="tab-rename"
+                    autoFocus
+                    value={renaming.text}
+                    onChange={(e) => setRenaming({ id: t.id, text: e.target.value })}
+                    onBlur={commitRename}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === "Enter") commitRename();
+                      else if (e.key === "Escape") setRenaming(null);
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    spellCheck={false}
+                  />
+                ) : (
+                  <span className="tab-title">{t.title}</span>
+                )}
+                {tabs.length > 1 && renaming?.id !== t.id && (
                   <span
                     className="tab-close"
                     onClick={(e) => {
