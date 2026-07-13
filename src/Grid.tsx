@@ -74,9 +74,10 @@ type Props = {
     dryRun: boolean,
   ) => Promise<string[]>;
   refresh: () => void;
+  onExport: (format: "csv" | "json") => void;
 };
 
-export default function Grid({ columns, rows, editable, applyChanges, refresh }: Props) {
+export default function Grid({ columns, rows, editable, applyChanges, refresh, onExport }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [sel, setSel] = useState<Sel | null>(null);
   const [inspecting, setInspecting] = useState(false);
@@ -551,14 +552,29 @@ export default function Grid({ columns, rows, editable, applyChanges, refresh }:
         )}
       </div>
 
-      {editable && (
-        <div className="grid-toolbar">
-          <button className="btn mini" onClick={addRow}>
-            + Row
-          </button>
-          <span className="grid-toolbar-hint">⌘⌫ marks row for delete · empty new cell = DEFAULT</span>
-        </div>
-      )}
+      <div className="grid-toolbar">
+        {editable && (
+          <>
+            <button className="btn mini" onClick={addRow}>
+              + Row
+            </button>
+            <span className="grid-toolbar-hint">
+              ⌘⌫ marks row for delete · empty new cell = DEFAULT
+            </span>
+          </>
+        )}
+        <span className="spacer" />
+        {rows.length > 0 && (
+          <>
+            <button className="btn mini" onClick={() => onExport("csv")}>
+              Export CSV
+            </button>
+            <button className="btn mini" onClick={() => onExport("json")}>
+              Export JSON
+            </button>
+          </>
+        )}
+      </div>
 
       {changeCount > 0 && (
         <div className="edits-bar">

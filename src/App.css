@@ -619,6 +619,46 @@ body.row-resizing {
   user-select: none;
 }
 
+.grid-toolbar .spacer {
+  flex: 1;
+}
+
+/* --- sidebar column rows ----------------------------------------------------- */
+
+.item-chevron {
+  display: inline-block;
+  width: 11px;
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: 10px;
+  text-align: center;
+}
+
+.item-chevron:hover {
+  color: var(--text);
+}
+
+.col-row {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 1px 10px 1px 48px;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.col-name {
+  color: var(--text);
+}
+
+.col-type {
+  color: var(--text-dim);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .edits-bar {
   display: flex;
   align-items: center;

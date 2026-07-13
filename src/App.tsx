@@ -7,6 +7,8 @@ import Palette, { type PaletteItem } from "./Palette";
 import PlanView, { type PlanRoot } from "./PlanView";
 import { splitStatements } from "./sqlStatements";
 import { buildNamespace, type CatalogTable } from "./sqlNamespace";
+import { toCsv, toJson } from "./export";
+import { save } from "@tauri-apps/plugin-dialog";
 import type { SQLNamespace } from "@codemirror/lang-sql";
 import "./App.css";
 
@@ -101,6 +103,8 @@ function App() {
   const [connError, setConnError] = useState("");
   const [objects, setObjects] = useState<DbObject[]>([]);
   const [schemaNs, setSchemaNs] = useState<SQLNamespace | null>(null);
+  const [catalog, setCatalog] = useState<CatalogTable[]>([]);
+  const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string>("");
@@ -134,6 +138,7 @@ function App() {
     setConn(null);
     setObjects([]);
     setSchemaNs(null);
+    setCatalog([]);
     try {
       const info = await invoke<ConnInfo>("connect_profile", { profileId: p.id });
       setConn(info);
@@ -145,6 +150,7 @@ function App() {
       // Autocomplete dictionary loads after the sidebar; failures are non-fatal.
       try {
         const catalog = await invoke<CatalogTable[]>("schema_catalog", { connId: info.connId });
+        setCatalog(catalog);
         setSchemaNs(buildNamespace(catalog));
       } catch {
         // completions just stay keyword-only
@@ -535,6 +541,39 @@ function App() {
     return [...bySchema.entries()];
   }, [objects, filter]);
 
+  const columnsByTable = useMemo(() => {
+    const m = new Map<string, CatalogTable>();
+    for (const t of catalog) m.set(`${t.schema}.${t.name}`, t);
+    return m;
+  }, [catalog]);
+
+  const toggleTableExpand = (key: string) =>
+    setExpandedTables((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  /** Export a tab's result set through the native save dialog. */
+  const exportTab = useCallback(async (tabId: number, format: "csv" | "json") => {
+    const t = tabsRef.current.find((x) => x.id === tabId);
+    if (!t || t.columns.length === 0) return;
+    const base = (t.editable?.table ?? t.title.replace(/\W+/g, "_") ?? "results").toLowerCase();
+    const path = await save({
+      defaultPath: `${base}.${format}`,
+      filters: [{ name: format.toUpperCase(), extensions: [format] }],
+    });
+    if (!path) return;
+    const contents = format === "csv" ? toCsv(t.columns, t.rows) : toJson(t.columns, t.rows);
+    try {
+      await invoke("write_file", { path, contents });
+      updateTab(tabId, { status: `exported ${t.rows.length.toLocaleString()} rows → ${path.split("/").pop()}` });
+    } catch (e) {
+      updateTab(tabId, { error: String(e) });
+    }
+  }, [updateTab]);
+
   const startSplitDrag = (e: React.MouseEvent) => {
     e.preventDefault();
     const startY = e.clientY;
@@ -613,6 +652,20 @@ function App() {
         },
       },
     ];
+    items.push(
+      {
+        id: "export-csv",
+        label: "Export results as CSV",
+        group: "cmd",
+        run: () => exportTab(activeTabIdRef.current, "csv"),
+      },
+      {
+        id: "export-json",
+        label: "Export results as JSON",
+        group: "cmd",
+        run: () => exportTab(activeTabIdRef.current, "json"),
+      },
+    );
     if (tx === "none") {
       items.push({ id: "begin", label: "Begin transaction", group: "cmd", run: () => txAction("begin") });
     } else {
@@ -670,6 +723,7 @@ function App() {
     openObject,
     updateTab,
     loadSnippets,
+    exportTab,
   ]);
 
   const banner = conn
@@ -785,17 +839,36 @@ function App() {
                     {!collapsed.has(schema) &&
                       items.map((o) => {
                         const key = `${o.schema}.${o.name}`;
+                        const cols = columnsByTable.get(key)?.columns;
+                        const expanded = expandedTables.has(key);
                         return (
-                          <div
-                            key={key}
-                            className={`item-row ${selected === key ? "selected" : ""}`}
-                            onClick={() => openObject(o)}
-                            title={`${o.kind} ${key}`}
-                          >
-                            <span className={`obj-icon ${o.kind}`}>
-                              {KIND_ICON[o.kind] ?? "▦"}
-                            </span>
-                            {o.name}
+                          <div key={key}>
+                            <div
+                              className={`item-row ${selected === key ? "selected" : ""}`}
+                              onClick={() => openObject(o)}
+                              title={`${o.kind} ${key}`}
+                            >
+                              <span
+                                className="item-chevron"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleTableExpand(key);
+                                }}
+                              >
+                                {cols?.length ? (expanded ? "⌄" : "›") : ""}
+                              </span>
+                              <span className={`obj-icon ${o.kind}`}>
+                                {KIND_ICON[o.kind] ?? "▦"}
+                              </span>
+                              {o.name}
+                            </div>
+                            {expanded &&
+                              cols?.map((c) => (
+                                <div key={c.name} className="col-row" title={`${c.name} ${c.dataType}`}>
+                                  <span className="col-name">{c.name}</span>
+                                  <span className="col-type">{c.dataType}</span>
+                                </div>
+                              ))}
                           </div>
                         );
                       })}
@@ -935,6 +1008,7 @@ function App() {
                     refresh={() => {
                       if (t.lastSql) runSql(t.lastSql, t.id);
                     }}
+                    onExport={(format) => exportTab(t.id, format)}
                   />
                 )
               )}

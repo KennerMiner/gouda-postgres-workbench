@@ -50,10 +50,12 @@ Personal daily driver, macOS-first.
 - [x] Grid: cell selection (click/arrows/⌘C/Esc), JSONB/array inspector panel
       with collapsible typed tree + copy pretty/compact; >200KB falls back to
       text view
-- [ ] Schema tree: add functions/types; column list under each table
+- [x] Schema tree: column list (name + type) under each table via chevron
+      (functions/types still TODO)
 - [x] Persistent searchable query history (SQLite in app-data dir, last 5000,
       Items/History sidebar tabs, click loads into editor)
-- [ ] Export: CSV / JSON / SQL inserts (COPY TO for big sets)
+- [x] Export: CSV / JSON via native save dialog, from grid toolbar or
+      palette (SQL-inserts + COPY TO for huge sets still TODO)
 
 ### M2 — Better than Beekeeper
 - [x] Schema-aware autocomplete: schema_catalog command (tables/views +
