@@ -1196,6 +1196,209 @@ body.row-resizing {
   color: #fff;
 }
 
+/* --- plan view (visual EXPLAIN) --------------------------------------------- */
+
+.plan-view {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 12px;
+  font: 11.5px/1.7 var(--mono);
+}
+
+.plan-summary {
+  padding: 4px 0 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.plan-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 8px 2px 0;
+  white-space: nowrap;
+}
+
+.plan-bar {
+  position: absolute;
+  left: 0;
+  top: 1px;
+  bottom: 1px;
+  background: rgba(76, 175, 80, 0.1);
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+.plan-row.warm .plan-bar {
+  background: rgba(217, 160, 95, 0.16);
+}
+
+.plan-row.hot .plan-bar {
+  background: rgba(229, 84, 78, 0.18);
+}
+
+.plan-chevron {
+  width: 12px;
+  color: var(--text-dim);
+  cursor: default;
+  z-index: 1;
+}
+
+.plan-type {
+  font-weight: 600;
+  z-index: 1;
+}
+
+.plan-target {
+  color: #6fb3e0;
+  z-index: 1;
+}
+
+.plan-badge {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: rgba(229, 84, 78, 0.22);
+  color: #f0928e;
+  font-size: 10px;
+  z-index: 1;
+}
+
+.plan-badge.warn {
+  background: rgba(217, 160, 95, 0.22);
+  color: #e8c896;
+}
+
+.plan-metrics {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  z-index: 1;
+}
+
+.plan-cond {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- command palette --------------------------------------------------------- */
+
+.palette-overlay {
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+
+.palette {
+  display: flex;
+  flex-direction: column;
+  width: 520px;
+  max-width: calc(100vw - 80px);
+  max-height: 50vh;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.palette-input {
+  padding: 11px 14px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+
+.palette-list {
+  overflow-y: auto;
+}
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 14px;
+  font-size: 12px;
+  cursor: default;
+}
+
+.palette-item.cursor {
+  background: var(--green);
+  color: #fff;
+}
+
+.palette-group {
+  min-width: 52px;
+  color: var(--text-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.palette-item.cursor .palette-group,
+.palette-item.cursor .palette-hint {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.palette-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-hint {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.palette-empty {
+  padding: 14px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+/* --- tx + lock -------------------------------------------------------------- */
+
+.btn.lock.on {
+  border-color: #d9a05f;
+  background: rgba(217, 160, 95, 0.16);
+}
+
+.tx-state {
+  padding: 1px 7px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.tx-state.open {
+  background: rgba(76, 175, 80, 0.2);
+  color: #8fd694;
+}
+
+.tx-state.aborted {
+  background: rgba(229, 84, 78, 0.22);
+  color: #f0928e;
+}
+
+.hint-sep {
+  margin: 0 4px;
+  color: var(--border);
+}
+
+.statusbar .hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* --- bottom status bar ----------------------------------------------------- */
 
 .statusbar {

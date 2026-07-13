@@ -15,6 +15,8 @@ export type Profile = {
   sshUser: string;
   /** Empty = SSH agent / default key files. */
   sshKeyPath: string;
+  /** Sessions open with default_transaction_read_only = on. */
+  readOnly: boolean;
 };
 
 export const PROFILE_COLORS = ["green", "blue", "purple", "amber", "red"] as const;
@@ -33,6 +35,7 @@ const BLANK: Profile = {
   sshPort: 22,
   sshUser: "",
   sshKeyPath: "",
+  readOnly: false,
 };
 
 type Props = {
@@ -179,6 +182,16 @@ export default function ConnectionModal({
               onChange={(e) => setPassword(e.target.value)}
               placeholder={form.id !== null ? "•••••• (unchanged)" : ""}
             />
+          </label>
+          <label className="ssh-toggle">
+            <span className="ssh-toggle-row">
+              <input
+                type="checkbox"
+                checked={form.readOnly}
+                onChange={(e) => set("readOnly", e.target.checked)}
+              />
+              Open read-only
+            </span>
           </label>
           <label className="ssh-toggle">
             <span className="ssh-toggle-row">

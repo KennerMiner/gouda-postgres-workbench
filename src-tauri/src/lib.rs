@@ -2,6 +2,7 @@ mod db;
 mod edits;
 mod history;
 mod profiles;
+mod snippets;
 mod store;
 mod tunnel;
 
@@ -24,9 +25,14 @@ pub fn run() {
             db::list_objects,
             db::schema_catalog,
             db::run_query,
+            db::exec_simple,
+            db::explain_query,
             edits::apply_changes,
             history::history_list,
             history::history_clear,
+            snippets::snippet_list,
+            snippets::snippet_save,
+            snippets::snippet_delete,
             profiles::profiles_list,
             profiles::profile_save,
             profiles::profile_delete,

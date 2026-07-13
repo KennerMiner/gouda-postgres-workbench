@@ -44,7 +44,9 @@ Personal daily driver, macOS-first.
       column widths, sticky header + row gutter
 - [x] Editor tabs: per-tab results/status/errors, per-tab editor state
       (undo/cursor), auto-title from query target, running indicator,
-      ⌘T new / × close (run-all via simple_query still TODO)
+      ⌘T new / × close, drag reorder, double-click rename
+- [x] Run-all scripts: ⌘⇧↵ / Run button execute statements sequentially,
+      stop at first failure with statement N-of-M context
 - [x] Grid: cell selection (click/arrows/⌘C/Esc), JSONB/array inspector panel
       with collapsible typed tree + copy pretty/compact; >200KB falls back to
       text view
@@ -65,9 +67,14 @@ Personal daily driver, macOS-first.
 - [x] Row insert/delete: + Row pending rows (empty cell = DEFAULT, ⌘⌫ = NULL),
       ⌘⌫ toggles row deletion; one transactional ChangeSet ordered
       updates → deletes → inserts
-- [ ] Visual EXPLAIN (ANALYZE, BUFFERS) plan tree
-- [ ] Command palette (cmdk), saved snippets
-- [ ] Transaction mode (manual commit) + read-only connection toggle
+- [x] Visual EXPLAIN: plan tree w/ time/cost bars, self-time heat, est-vs-
+      actual + filter-waste badges; ANALYZE gated to selects (writes are
+      planned, never executed); ⌘E / Explain button
+- [x] Command palette (⌘K, hand-rolled fuzzy): commands, open-table
+      entries, snippets (save current SQL / insert / delete, SQLite-backed)
+- [x] Transactions: Begin/Commit/Rollback in statusbar w/ open/aborted
+      tracking; read-only rails: per-profile default + runtime lock toggle
+      (default_transaction_read_only, server-enforced), grid editing gated
 - [ ] Light theme
 
 ### M3 — Postgres-native flex

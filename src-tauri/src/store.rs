@@ -43,9 +43,18 @@ impl Store {
             "alter table profiles add column ssh_port integer not null default 22",
             "alter table profiles add column ssh_user text not null default ''",
             "alter table profiles add column ssh_key_path text not null default ''",
+            "alter table profiles add column read_only integer not null default 0",
         ] {
             let _ = conn.execute(stmt, []);
         }
+
+        conn.execute_batch(
+            "create table if not exists snippets (
+                 id   integer primary key,
+                 name text not null unique,
+                 sql  text not null
+             );",
+        )?;
 
         // First run: seed the local dev profile so the app stays a
         // zero-config daily driver. Password goes to the Keychain.

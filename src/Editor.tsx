@@ -146,11 +146,15 @@ type Props = {
   onChange: (text: string) => void;
   /** Called with the SQL to execute: selection if any, else statement under cursor. */
   onRun: (sql: string) => void;
+  /** ⌘⇧↵ — run the whole script. */
+  onRunAll: (sql: string) => void;
+  /** ⌘E — explain the statement under the cursor. */
+  onExplain: (sql: string) => void;
   /** Live schema for completions; null until the catalog loads. */
   schema: SQLNamespace | null;
 };
 
-export default function Editor({ tabId, value, onChange, onRun, schema }: Props) {
+export default function Editor({ tabId, value, onChange, onRun, onRunAll, onExplain, schema }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const sqlCompartment = useRef(new Compartment());
@@ -161,9 +165,13 @@ export default function Editor({ tabId, value, onChange, onRun, schema }: Props)
   const extensionsRef = useRef<import("@codemirror/state").Extension | null>(null);
   // Refs so the CodeMirror keymap (created once) always sees current handlers.
   const onRunRef = useRef(onRun);
+  const onRunAllRef = useRef(onRunAll);
+  const onExplainRef = useRef(onExplain);
   const onChangeRef = useRef(onChange);
   const schemaRef = useRef(schema);
   onRunRef.current = onRun;
+  onRunAllRef.current = onRunAll;
+  onExplainRef.current = onExplain;
   onChangeRef.current = onChange;
   schemaRef.current = schema;
 
@@ -176,6 +184,14 @@ export default function Editor({ tabId, value, onChange, onRun, schema }: Props)
         // when no completion is active.
         { key: "Tab", run: acceptCompletion },
         {
+          key: "Mod-Shift-Enter",
+          run: (v) => {
+            const text = v.state.doc.toString();
+            if (text.trim()) onRunAllRef.current(text);
+            return true;
+          },
+        },
+        {
           key: "Mod-Enter",
           run: (v) => {
             const sel = v.state.selection.main;
@@ -184,6 +200,18 @@ export default function Editor({ tabId, value, onChange, onRun, schema }: Props)
               ? statementAt(text, sel.head)
               : text.slice(sel.from, sel.to).trim();
             if (toRun) onRunRef.current(toRun);
+            return true;
+          },
+        },
+        {
+          key: "Mod-e",
+          run: (v) => {
+            const sel = v.state.selection.main;
+            const text = v.state.doc.toString();
+            const stmt = sel.empty
+              ? statementAt(text, sel.head)
+              : text.slice(sel.from, sel.to).trim();
+            if (stmt) onExplainRef.current(stmt);
             return true;
           },
         },

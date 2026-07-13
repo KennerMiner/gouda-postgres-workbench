@@ -428,6 +428,67 @@ pub async fn schema_catalog(
     Ok(tables)
 }
 
+/// Fire-and-forget statement with no result plumbing — used for session
+/// control (begin/commit/rollback, SET …).
+#[tauri::command]
+pub async fn exec_simple(state: State<'_, Connections>, conn_id: u32, sql: String) -> Result<(), String> {
+    let entry = state.get(conn_id).await?;
+    let res = entry.client.batch_execute(&sql).await.map_err(|e| pg_err(&e));
+    if res.is_err() {
+        state.drop_if_closed(conn_id, &entry.client).await;
+    }
+    res
+}
+
+/// EXPLAIN a statement, returning the JSON plan. ANALYZE (which executes the
+/// statement!) is only honored for select/with/values queries — a write is
+/// always planned without running.
+#[tauri::command]
+pub async fn explain_query(
+    state: State<'_, Connections>,
+    history: State<'_, crate::store::Store>,
+    conn_id: u32,
+    sql: String,
+    analyze: bool,
+) -> Result<serde_json::Value, String> {
+    let entry = state.get(conn_id).await?;
+    let head = sql.trim_start().to_lowercase();
+    let safe_analyze =
+        analyze && (head.starts_with("select") || head.starts_with("with") || head.starts_with("values"));
+    let prefix = if safe_analyze {
+        "explain (analyze, buffers, timing, format json) "
+    } else {
+        "explain (format json) "
+    };
+    let full = format!("{prefix}{sql}");
+    let started_at = chrono::Utc::now().timestamp_millis();
+    let start = std::time::Instant::now();
+
+    let row = entry.client.query_one(&full, &[]).await.map_err(|e| {
+        let msg = pg_err(&e);
+        msg
+    });
+    match row {
+        Ok(row) => {
+            let plan: serde_json::Value = row.get(0);
+            crate::history::record(
+                &history,
+                &entry.label,
+                &full,
+                started_at,
+                Some(start.elapsed().as_millis() as i64),
+                None,
+                None,
+            );
+            Ok(plan)
+        }
+        Err(e) => {
+            state.drop_if_closed(conn_id, &entry.client).await;
+            Err(e)
+        }
+    }
+}
+
 /// Run a single SQL statement on an open connection and stream results.
 ///
 /// Uses the extended protocol (prepare + query_raw), so exactly one statement

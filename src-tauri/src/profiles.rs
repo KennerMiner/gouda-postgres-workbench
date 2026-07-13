@@ -56,6 +56,9 @@ pub struct Profile {
     /// Empty = use SSH agent, then default key files.
     #[serde(default)]
     pub ssh_key_path: String,
+    /// Open sessions read-only (default_transaction_read_only = on).
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 fn default_ssh_port() -> u16 {
@@ -111,7 +114,7 @@ pub fn profiles_list(store: State<'_, Store>) -> Result<Vec<Profile>, String> {
     let mut stmt = conn
         .prepare(
             "select id, name, host, port, dbname, username, color, last_used_at,
-                    ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_key_path
+                    ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_key_path, read_only
              from profiles order by last_used_at desc nulls last, name",
         )
         .map_err(|e| e.to_string())?;
@@ -131,6 +134,7 @@ pub fn profiles_list(store: State<'_, Store>) -> Result<Vec<Profile>, String> {
                 ssh_port: r.get(10)?,
                 ssh_user: r.get(11)?,
                 ssh_key_path: r.get(12)?,
+                read_only: r.get(13)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -154,8 +158,8 @@ pub fn profile_save(
                 "update profiles
                  set name = ?1, host = ?2, port = ?3, dbname = ?4, username = ?5, color = ?6,
                      ssh_enabled = ?7, ssh_host = ?8, ssh_port = ?9, ssh_user = ?10,
-                     ssh_key_path = ?11
-                 where id = ?12",
+                     ssh_key_path = ?11, read_only = ?12
+                 where id = ?13",
                 rusqlite::params![
                     profile.name,
                     profile.host,
@@ -168,6 +172,7 @@ pub fn profile_save(
                     profile.ssh_port,
                     profile.ssh_user,
                     profile.ssh_key_path,
+                    profile.read_only,
                     id
                 ],
             )
@@ -177,8 +182,9 @@ pub fn profile_save(
         None => {
             conn.execute(
                 "insert into profiles (name, host, port, dbname, username, color,
-                                       ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_key_path)
-                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                                       ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_key_path,
+                                       read_only)
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 rusqlite::params![
                     profile.name,
                     profile.host,
@@ -190,7 +196,8 @@ pub fn profile_save(
                     profile.ssh_host,
                     profile.ssh_port,
                     profile.ssh_user,
-                    profile.ssh_key_path
+                    profile.ssh_key_path,
+                    profile.read_only
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -259,7 +266,7 @@ pub async fn connect_profile(
         let profile = conn
             .query_row(
                 "select id, name, host, port, dbname, username, color, last_used_at,
-                        ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_key_path
+                        ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_key_path, read_only
                  from profiles where id = ?1",
                 [profile_id],
                 |r| {
@@ -277,6 +284,7 @@ pub async fn connect_profile(
                         ssh_port: r.get(10)?,
                         ssh_user: r.get(11)?,
                         ssh_key_path: r.get(12)?,
+                        read_only: r.get(13)?,
                     })
                 },
             )
@@ -286,6 +294,15 @@ pub async fn connect_profile(
 
     let (config, tunnel) = prepare(&profile, password).await?;
     let info = crate::db::open_config(&connections, config, tunnel).await?;
+
+    if profile.read_only {
+        let entry = connections.entry(info.conn_id).await?;
+        entry
+            .client()
+            .batch_execute("set default_transaction_read_only = on")
+            .await
+            .map_err(|e| format!("read-only setup: {}", crate::db::pg_err(&e)))?;
+    }
 
     let conn = store.0.lock().map_err(|e| e.to_string())?;
     conn.execute(

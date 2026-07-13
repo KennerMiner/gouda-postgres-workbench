@@ -3,6 +3,9 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import Editor from "./Editor";
 import Grid, { type ChangeSet, type ColumnMeta, type EditableInfo } from "./Grid";
 import ConnectionModal, { type Profile } from "./ConnectionModal";
+import Palette, { type PaletteItem } from "./Palette";
+import PlanView, { type PlanRoot } from "./PlanView";
+import { splitStatements } from "./sqlStatements";
 import { buildNamespace, type CatalogTable } from "./sqlNamespace";
 import type { SQLNamespace } from "@codemirror/lang-sql";
 import "./App.css";
@@ -25,6 +28,8 @@ type HistoryEntry = {
   error: string | null;
 };
 
+type Snippet = { id: number; name: string; sql: string };
+
 type QueryTab = {
   id: number;
   title: string;
@@ -38,6 +43,7 @@ type QueryTab = {
   status: string;
   error: string;
   running: boolean;
+  plan: PlanRoot[] | null;
 };
 
 const DEFAULT_SQL =
@@ -83,6 +89,7 @@ function blankTab(id: number, sql = ""): QueryTab {
     status: "",
     error: "",
     running: false,
+    plan: null,
   };
 }
 
@@ -131,6 +138,8 @@ function App() {
       const info = await invoke<ConnInfo>("connect_profile", { profileId: p.id });
       setConn(info);
       setActiveProfile(p);
+      setTx("none");
+      setReadOnly(p.readOnly);
       setShowConnections(false);
       setObjects(await invoke<DbObject[]>("list_objects", { connId: info.connId }));
       // Autocomplete dictionary loads after the sidebar; failures are non-fatal.
@@ -203,8 +212,8 @@ function App() {
   }, [sideTab, loadHistory]);
 
   const runSql = useCallback(
-    async (text: string, tabId?: number) => {
-      if (!conn) return;
+    (text: string, tabId?: number): Promise<boolean> => {
+      if (!conn) return Promise.resolve(false);
       const id = tabId ?? activeTabIdRef.current;
       rowBuffers.current.set(id, []);
       setTabs((ts) =>
@@ -220,10 +229,12 @@ function App() {
                 status: "",
                 error: "",
                 running: true,
+                plan: null,
               }
             : t,
         ),
       );
+      return new Promise<boolean>((resolve) => {
 
       const channel = new Channel<QueryEvent>();
       channel.onmessage = (ev) => {
@@ -248,17 +259,81 @@ function App() {
               running: false,
             });
             loadHistoryRef.current();
+            resolve(true);
             break;
           }
           case "error":
             updateTab(id, { error: ev.message, running: false });
+            if (txRef.current === "open") setTx("aborted");
             loadHistoryRef.current();
+            resolve(false);
             break;
         }
       };
 
+      invoke("run_query", { connId: conn.connId, sql: text, onEvent: channel }).catch((e) => {
+        updateTab(id, { error: String(e), running: false });
+        resolve(false);
+      });
+      });
+    },
+    [conn, updateTab],
+  );
+
+  /** Run a whole script: statements sequentially, stopping at the first failure. */
+  const runScript = useCallback(
+    async (text: string, tabId?: number) => {
+      const id = tabId ?? activeTabIdRef.current;
+      const stmts = splitStatements(text)
+        .map((r) => text.slice(r.from, r.to).trim())
+        .filter(Boolean);
+      if (stmts.length === 0) return;
+      if (stmts.length === 1) {
+        runSql(stmts[0], id);
+        return;
+      }
+      for (let i = 0; i < stmts.length; i++) {
+        const ok = await runSql(stmts[i], id);
+        if (!ok) {
+          setTabs((ts) =>
+            ts.map((t) =>
+              t.id === id
+                ? { ...t, error: `statement ${i + 1} of ${stmts.length} failed:\n\n${t.error}` }
+                : t,
+            ),
+          );
+          return;
+        }
+      }
+      setTabs((ts) =>
+        ts.map((t) =>
+          t.id === id ? { ...t, status: `${stmts.length} statements — ${t.status}` } : t,
+        ),
+      );
+    },
+    [runSql],
+  );
+
+  /** EXPLAIN a statement into the tab's plan view. */
+  const explainStmt = useCallback(
+    async (stmt: string, tabId?: number) => {
+      if (!conn) return;
+      const id = tabId ?? activeTabIdRef.current;
+      updateTab(id, { running: true, error: "", plan: null });
       try {
-        await invoke("run_query", { connId: conn.connId, sql: text, onEvent: channel });
+        const plan = await invoke<PlanRoot[]>("explain_query", {
+          connId: conn.connId,
+          sql: stmt,
+          analyze: true,
+        });
+        updateTab(id, {
+          plan,
+          columns: [],
+          rows: [],
+          editable: null,
+          status: "explain",
+          running: false,
+        });
       } catch (e) {
         updateTab(id, { error: String(e), running: false });
       }
@@ -266,7 +341,7 @@ function App() {
     [conn, updateTab],
   );
 
-  const run = useCallback(() => runSql(activeTab.sql), [runSql, activeTab.sql]);
+  const run = useCallback(() => runScript(activeTab.sql), [runScript, activeTab.sql]);
 
   const stop = useCallback(async () => {
     if (!conn) return;
@@ -283,6 +358,57 @@ function App() {
     setActiveTabId(id);
     return id;
   }, []);
+
+  const [tx, setTx] = useState<"none" | "open" | "aborted">("none");
+  const txRef = useRef(tx);
+  txRef.current = tx;
+  const [readOnly, setReadOnly] = useState(false);
+  const [snippets, setSnippets] = useState<Snippet[]>([]);
+  const [showPalette, setShowPalette] = useState(false);
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+
+  const loadSnippets = useCallback(async () => {
+    try {
+      setSnippets(await invoke<Snippet[]>("snippet_list"));
+    } catch {
+      // non-critical
+    }
+  }, []);
+  useEffect(() => {
+    loadSnippets();
+  }, [loadSnippets]);
+
+  const execSimple = useCallback(
+    async (sql: string) => {
+      if (!conn) throw new Error("not connected");
+      await invoke("exec_simple", { connId: conn.connId, sql });
+    },
+    [conn],
+  );
+
+  const txAction = useCallback(
+    async (action: "begin" | "commit" | "rollback") => {
+      try {
+        await execSimple(action);
+        setTx(action === "begin" ? "open" : "none");
+      } catch {
+        // Failed tx control: reflect reality as best we can.
+        if (action !== "begin") setTx("none");
+      }
+    },
+    [execSimple],
+  );
+
+  const toggleReadOnly = useCallback(async () => {
+    const next = !readOnly;
+    try {
+      await execSimple(`set default_transaction_read_only = ${next ? "on" : "off"}`);
+      setReadOnly(next);
+    } catch {
+      // surfaced on next query if the session is dead
+    }
+  }, [execSimple, readOnly]);
 
   const [renaming, setRenaming] = useState<{ id: number; text: string } | null>(null);
   const [dragTabId, setDragTabId] = useState<number | null>(null);
@@ -377,6 +503,9 @@ function App() {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "t") {
         e.preventDefault();
         addTab();
+      } else if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setShowPalette((v) => !v);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -432,6 +561,117 @@ function App() {
       return next;
     });
 
+  const paletteItems = useMemo<PaletteItem[]>(() => {
+    const items: PaletteItem[] = [
+      { id: "new-tab", label: "New tab", group: "cmd", hint: "⌘T", run: () => addTab() },
+      {
+        id: "run-all",
+        label: "Run all statements",
+        group: "cmd",
+        hint: "⌘⇧↵",
+        run: () => runScript(tabsRef.current.find((t) => t.id === activeTabIdRef.current)?.sql ?? ""),
+      },
+      {
+        id: "explain",
+        label: "Explain first statement",
+        group: "cmd",
+        hint: "⌘E",
+        run: () => {
+          const sql = tabsRef.current.find((t) => t.id === activeTabIdRef.current)?.sql ?? "";
+          const r = splitStatements(sql)[0];
+          if (r) explainStmt(sql.slice(r.from, r.to).trim());
+        },
+      },
+      { id: "connections", label: "Connections…", group: "cmd", run: () => setShowConnections(true) },
+      {
+        id: "reconnect",
+        label: "Reconnect",
+        group: "cmd",
+        run: () => activeProfile && connectProfile(activeProfile).catch(() => {}),
+      },
+      {
+        id: "toggle-ro",
+        label: readOnly ? "Disable read-only session" : "Make session read-only",
+        group: "cmd",
+        run: () => toggleReadOnly(),
+      },
+      {
+        id: "snippet-save",
+        label: "Save current SQL as snippet…",
+        group: "snippet",
+        prompt: {
+          placeholder: "Snippet name…",
+          submit: async (name) => {
+            const sql = tabsRef.current.find((t) => t.id === activeTabIdRef.current)?.sql ?? "";
+            try {
+              await invoke("snippet_save", { name, sql });
+              await loadSnippets();
+            } catch {
+              // palette is closed by now; failure just means no new snippet
+            }
+          },
+        },
+      },
+    ];
+    if (tx === "none") {
+      items.push({ id: "begin", label: "Begin transaction", group: "cmd", run: () => txAction("begin") });
+    } else {
+      items.push(
+        { id: "commit", label: "Commit transaction", group: "cmd", run: () => txAction("commit") },
+        { id: "rollback", label: "Rollback transaction", group: "cmd", run: () => txAction("rollback") },
+      );
+    }
+    for (const o of objects) {
+      items.push({
+        id: `open:${o.schema}.${o.name}`,
+        label: `Open ${o.schema}.${o.name}`,
+        group: o.kind,
+        run: () => openObject(o),
+      });
+    }
+    for (const sn of snippets) {
+      items.push({
+        id: `snippet:${sn.id}`,
+        label: `Snippet: ${sn.name}`,
+        group: "snippet",
+        run: () => {
+          const active = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
+          if (active && !active.sql.trim()) updateTab(active.id, { sql: sn.sql });
+          else addTab(sn.sql);
+        },
+      });
+      items.push({
+        id: `snippet-del:${sn.id}`,
+        label: `Delete snippet: ${sn.name}`,
+        group: "snippet",
+        run: async () => {
+          try {
+            await invoke("snippet_delete", { snippetId: sn.id });
+            await loadSnippets();
+          } catch {
+            // non-critical
+          }
+        },
+      });
+    }
+    return items;
+  }, [
+    addTab,
+    runScript,
+    explainStmt,
+    activeProfile,
+    connectProfile,
+    readOnly,
+    toggleReadOnly,
+    tx,
+    txAction,
+    objects,
+    snippets,
+    openObject,
+    updateTab,
+    loadSnippets,
+  ]);
+
   const banner = conn
     ? `PostgreSQL ${conn.serverVersion} : ${conn.user} : ${activeProfile?.host ?? "?"} : ${conn.database}`
     : connError
@@ -456,12 +696,33 @@ function App() {
           </button>
         )}
         <span className="titlebar-space" data-tauri-drag-region />
+        <button
+          className={`btn lock ${readOnly ? "on" : ""}`}
+          onClick={toggleReadOnly}
+          disabled={!conn}
+          title={readOnly ? "Session is read-only — click to allow writes" : "Make session read-only"}
+        >
+          {readOnly ? "🔒" : "🔓"}
+        </button>
+        <button
+          className="btn"
+          onClick={() => {
+            const stmts = splitStatements(activeTab.sql);
+            if (stmts.length) {
+              explainStmt(activeTab.sql.slice(stmts[0].from, stmts[0].to).trim());
+            }
+          }}
+          disabled={!conn || activeTab.running}
+          title="Explain (⌘E) — analyze runs selects only, writes are planned without executing"
+        >
+          Explain
+        </button>
         {activeTab.running ? (
           <button className="btn stop" onClick={stop} title="Cancel query">
             ■ Stop
           </button>
         ) : (
-          <button className="btn run" onClick={run} disabled={!conn} title="Run (⌘↵)">
+          <button className="btn run" onClick={run} disabled={!conn} title="Run all (⌘⇧↵)">
             ▶ Run
           </button>
         )}
@@ -471,6 +732,8 @@ function App() {
       <div className={`conn-banner ${bannerColor}`} data-tauri-drag-region>
         {banner}
       </div>
+
+      {showPalette && <Palette items={paletteItems} onClose={() => setShowPalette(false)} />}
 
       {showConnections && (
         <ConnectionModal
@@ -634,6 +897,8 @@ function App() {
               value={activeTab.sql}
               onChange={(text) => updateTab(activeTabIdRef.current, { sql: text })}
               onRun={runSql}
+              onRunAll={runScript}
+              onExplain={explainStmt}
               schema={schemaNs}
             />
           </div>
@@ -650,12 +915,14 @@ function App() {
             >
               {t.error ? (
                 <div className="error-pane">{t.error}</div>
+              ) : t.plan ? (
+                <PlanView roots={t.plan} />
               ) : (
                 t.columns.length > 0 && (
                   <Grid
                     columns={t.columns}
                     rows={t.rows}
-                    editable={t.editable}
+                    editable={readOnly ? null : t.editable}
                     applyChanges={(schema, table, changes: ChangeSet, dryRun) =>
                       invoke<string[]>("apply_changes", {
                         connId: conn?.connId ?? 0,
@@ -676,8 +943,31 @@ function App() {
 
           <div className="statusbar">
             <span className="hint">
-              Run statement: ⌘↵
-              {activeTab.columns.length > 0 && (activeTab.editable ? " · editable" : " · read-only")}
+              {tx === "none" && (
+                <button className="btn mini" disabled={!conn} onClick={() => txAction("begin")}>
+                  Begin
+                </button>
+              )}
+              {tx !== "none" && (
+                <>
+                  <span className={`tx-state ${tx}`}>
+                    {tx === "open" ? "in transaction" : "transaction aborted"}
+                  </span>
+                  {tx === "open" && (
+                    <button className="btn mini" onClick={() => txAction("commit")}>
+                      Commit
+                    </button>
+                  )}
+                  <button className="btn mini danger" onClick={() => txAction("rollback")}>
+                    Rollback
+                  </button>
+                </>
+              )}
+              <span className="hint-sep">·</span>⌘↵ stmt · ⌘⇧↵ all · ⌘K palette
+              {readOnly
+                ? " · read-only session"
+                : activeTab.columns.length > 0 &&
+                  (activeTab.editable ? " · editable" : " · read-only")}
             </span>
             <span className="rowcount">{activeTab.running ? "running…" : activeTab.status}</span>
             <span className="engine">
