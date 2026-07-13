@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gouda — a Postgres workbench for macOS</title>
+    <meta name="description" content="A fast, keyboard-first PostgreSQL client for macOS. SSH tunnels, safe editing, visual EXPLAIN, JSONB tools, and AI query generation. Free and open source." />
+    <meta property="og:title" content="Gouda — a Postgres workbench for macOS" />
+    <meta property="og:description" content="Fast, keyboard-first Postgres client for macOS. SSH tunnels, safe editing, visual EXPLAIN, JSONB tools, AI query generation." />
+    <meta property="og:image" content="https://kennerminer.github.io/gouda-postgres-workbench/screenshots/grid.png" />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%80%3C/text%3E%3C/svg%3E" />
+    <style>
+      :root {
+        --bg: #16181d;
+        --bg-2: #1c1e1f;
+        --panel: #24272e;
+        --border: #2c3038;
+        --text: #d7dae0;
+        --dim: #8a8f98;
+        --green: #4caf50;
+        --green-banner: #a5cf8d;
+        --blue: #6fb3e0;
+        --mono: ui-monospace, "SF Mono", Menlo, monospace;
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html { scroll-behavior: smooth; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+      }
+      a { color: var(--blue); text-decoration: none; }
+      .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+      /* header */
+      header {
+        border-bottom: 1px solid var(--border);
+        background: rgba(22, 24, 29, 0.85);
+        backdrop-filter: blur(8px);
+        position: sticky; top: 0; z-index: 10;
+      }
+      .nav { display: flex; align-items: center; gap: 16px; height: 56px; }
+      .brand { font-weight: 700; font-size: 17px; display: flex; align-items: center; gap: 8px; }
+      .nav .spacer { flex: 1; }
+      .nav a { color: var(--dim); font-size: 14px; }
+      .nav a:hover { color: var(--text); }
+
+      /* hero */
+      .hero { text-align: center; padding: 72px 0 40px; }
+      .hero h1 { font-size: 44px; line-height: 1.1; letter-spacing: -0.02em; }
+      .hero .tag { color: var(--dim); font-size: 18px; margin: 16px auto 0; max-width: 560px; }
+      .badges { margin-top: 18px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+      .chip {
+        font: 600 11px var(--mono); color: var(--green-banner);
+        background: rgba(165, 207, 141, 0.12); border: 1px solid rgba(165, 207, 141, 0.25);
+        border-radius: 20px; padding: 3px 12px;
+      }
+      .cta { margin-top: 28px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+      .btn {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 11px 22px; border-radius: 8px; font-size: 15px; font-weight: 600;
+        border: 1px solid var(--border);
+      }
+      .btn.primary { background: var(--green); border-color: var(--green); color: #fff; }
+      .btn.primary:hover { filter: brightness(1.08); }
+      .btn.ghost { background: var(--panel); color: var(--text); }
+      .btn.ghost:hover { border-color: var(--dim); }
+
+      .shot { border: 1px solid var(--border); border-radius: 10px; width: 100%; display: block; box-shadow: 0 20px 60px rgba(0,0,0,0.4); }
+      .hero-shot { margin-top: 44px; }
+
+      /* features */
+      section { padding: 56px 0; border-top: 1px solid var(--border); }
+      section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--green); margin-bottom: 10px; }
+      .feature { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: center; }
+      .feature + .feature { margin-top: 64px; }
+      .feature.reverse .txt { order: 2; }
+      .feature h3 { font-size: 24px; letter-spacing: -0.01em; }
+      .feature p { color: var(--dim); margin-top: 10px; }
+      .feature ul { list-style: none; margin-top: 14px; }
+      .feature li { padding-left: 22px; position: relative; margin: 6px 0; font-size: 15px; }
+      .feature li::before { content: "→"; position: absolute; left: 0; color: var(--green); }
+      code { font: 13px var(--mono); background: var(--panel); padding: 1px 6px; border-radius: 4px; }
+
+      /* grid of small features */
+      .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+      .card { background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+      .card h4 { font-size: 15px; margin-bottom: 6px; }
+      .card p { color: var(--dim); font-size: 13.5px; }
+      .card .ico { font-size: 20px; margin-bottom: 8px; }
+
+      /* install */
+      pre {
+        background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px;
+        padding: 18px 20px; overflow-x: auto; font: 13.5px/1.7 var(--mono); color: var(--text);
+        margin-top: 14px;
+      }
+      pre .c { color: var(--dim); }
+      .note { color: var(--dim); font-size: 14px; margin-top: 14px; }
+
+      footer { border-top: 1px solid var(--border); padding: 32px 0 48px; color: var(--dim); font-size: 14px; text-align: center; }
+      footer a { color: var(--dim); }
+      footer a:hover { color: var(--text); }
+
+      @media (max-width: 720px) {
+        .hero h1 { font-size: 34px; }
+        .feature, .feature.reverse .txt { grid-template-columns: 1fr; order: 0; }
+        .feature .txt { order: 0 !important; }
+        .grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="wrap nav">
+        <span class="brand">🧀 Gouda</span>
+        <span class="spacer"></span>
+        <a href="#features">Features</a>
+        <a href="#install">Install</a>
+        <a href="https://github.com/KennerMiner/gouda-postgres-workbench">GitHub</a>
+      </div>
+    </header>
+
+    <div class="wrap">
+      <div class="hero">
+        <h1>A Postgres workbench<br />for macOS</h1>
+        <p class="tag">Fast, keyboard-first, and honestly Postgres-native — SSH tunnels, safe editing, visual EXPLAIN, JSONB tools, and AI query generation. Free and open source.</p>
+        <div class="badges">
+          <span class="chip">Tauri + Rust + React</span>
+          <span class="chip">~18 MB</span>
+          <span class="chip">MIT</span>
+        </div>
+        <div class="cta">
+          <a class="btn primary" href="#install">Build it →</a>
+          <a class="btn ghost" href="https://github.com/KennerMiner/gouda-postgres-workbench">★ Star on GitHub</a>
+        </div>
+        <img class="shot hero-shot" src="screenshots/grid.png" alt="Query editor and results grid" />
+      </div>
+    </div>
+
+    <section id="features">
+      <div class="wrap">
+        <div class="feature">
+          <div class="txt">
+            <h2>Query &amp; explore</h2>
+            <h3>An editor that knows your schema</h3>
+            <p>CodeMirror 6 with Postgres highlighting and schema-aware autocomplete that triggers eagerly after keywords — tables after <code>FROM</code>, columns after <code>WHERE</code>, <code>alias.</code> resolution.</p>
+            <ul>
+              <li>⌘↵ runs the statement under the cursor, ⌘⇧↵ the whole script</li>
+              <li>Tabs with per-tab sessions — queries run concurrently, transactions are per-tab</li>
+              <li>psql backslash commands (<code>\du</code>, <code>\dt</code>, <code>\d table</code>…) translated into catalog queries</li>
+            </ul>
+          </div>
+          <img class="shot" src="screenshots/command-palette.png" alt="Command palette" />
+        </div>
+
+        <div class="feature reverse">
+          <div class="txt">
+            <h2>Understand</h2>
+            <h3>Visual EXPLAIN, done right</h3>
+            <p>Plan tree with time and cost bars, self-time heat, and est-vs-actual and rows-filtered-out badges. ANALYZE only ever runs for selects — writes are planned, never executed.</p>
+          </div>
+          <img class="shot" src="screenshots/explain.png" alt="Visual EXPLAIN" />
+        </div>
+
+        <div class="feature">
+          <div class="txt">
+            <h2>JSONB</h2>
+            <h3>Real tools for JSON columns</h3>
+            <p>A collapsible typed tree with key/value filtering and copy-as-Postgres-path. Edit a single node and it's staged as a surgical <code>jsonb_set</code> that won't clobber sibling keys.</p>
+          </div>
+          <img class="shot" src="screenshots/jsonb-inspector.png" alt="JSONB inspector" />
+        </div>
+
+        <div class="feature reverse">
+          <div class="txt">
+            <h2>Postgres-native</h2>
+            <h3>The things generic clients skip</h3>
+            <ul>
+              <li>Live <code>pg_stat_activity</code> monitor with cancel / kill per session</li>
+              <li>Schema diff between two connections</li>
+              <li>ER diagram from the foreign-key graph</li>
+              <li>LISTEN/NOTIFY console with a live event log</li>
+            </ul>
+          </div>
+          <img class="shot" src="screenshots/er-diagram.png" alt="ER diagram" />
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap">
+        <h2>And more</h2>
+        <div class="grid">
+          <div class="card"><div class="ico">🔐</div><h4>Keychain &amp; SSH</h4><p>Passwords in the macOS Keychain, pure-Rust SSH tunnels, TLS modes.</p></div>
+          <div class="card"><div class="ico">✏️</div><h4>Safe editing</h4><p>Preview the exact SQL, transactional apply, exactly-one-row guarantee.</p></div>
+          <div class="card"><div class="ico">🎨</div><h4>Banner colors</h4><p>Per-profile colors and separate windows keep prod and dev apart.</p></div>
+          <div class="card"><div class="ico">📤</div><h4>Streaming export</h4><p>CSV / JSON straight to file with no row cap.</p></div>
+          <div class="card"><div class="ico">✦</div><h4>Ask AI</h4><p>Describe a query, get commented SQL — it explores your schema first, never auto-runs.</p></div>
+          <div class="card"><div class="ico">⌨️</div><h4>Keyboard-first</h4><p>Command palette, statement-under-cursor, grid navigation, ⌘K everything.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="install">
+      <div class="wrap">
+        <h2>Install</h2>
+        <h3 style="font-size:22px">Build from source</h3>
+        <p class="note">Prereqs: <a href="https://rustup.rs">Rust</a>, Node 20+, macOS.</p>
+<pre><span class="c"># clone, build, and drag the app to /Applications</span>
+git clone https://github.com/KennerMiner/gouda-postgres-workbench
+cd gouda-postgres-workbench
+npm install
+npm run tauri build</pre>
+        <p class="note">macOS-only for now — the Keychain integration and window chrome are macOS-specific. Linux/Windows would need porting work; PRs welcome.</p>
+      </div>
+    </section>
+
+    <footer>
+      <div class="wrap">
+        🧀 <a href="https://github.com/KennerMiner/gouda-postgres-workbench">Gouda</a> — MIT licensed · built with Tauri, Rust, and React
+      </div>
+    </footer>
+  </body>
+</html>
