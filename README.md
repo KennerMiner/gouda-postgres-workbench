@@ -89,6 +89,21 @@ A Postgres workbench for macOS — fast, keyboard-first. Tauri v2 + Rust + React
 
 ## Install
 
+### Download a build
+
+Grab the latest `.dmg` from [Releases](https://github.com/KennerMiner/gouda-postgres-workbench/releases)
+(universal — Apple Silicon + Intel), open it, and drag **Gouda** to Applications.
+
+These builds are not yet notarized, so on first launch macOS Gatekeeper will
+warn you. Either right-click **Gouda.app** → **Open** → **Open**, or clear the
+quarantine flag once:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Gouda.app
+```
+
+### Build from source
+
 Prereqs: [Rust](https://rustup.rs), Node 20+, macOS.
 
 ```sh

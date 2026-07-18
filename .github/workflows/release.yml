@@ -1,0 +1,62 @@
+name: Release
+
+# Push a version tag to build a universal macOS bundle and publish it as a
+# GitHub Release:  git tag v0.2.0 && git push origin v0.2.0
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional signing + notarization. If these repo secrets are set the
+          # build is signed with a Developer ID and notarized; if absent, an
+          # unsigned build ships (users bypass Gatekeeper once — see README).
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          args: --target universal-apple-darwin --bundles app,dmg
+          tagName: ${{ github.ref_name }}
+          releaseName: "Gouda ${{ github.ref_name }}"
+          releaseBody: |
+            Universal macOS build (Apple Silicon + Intel). Download the `.dmg`, open it, and drag **Gouda** to Applications.
+
+            **First launch:** this build is not notarized, so macOS Gatekeeper will warn you. Either right-click **Gouda.app** → **Open** → **Open**, or run:
+
+            ```sh
+            xattr -dr com.apple.quarantine /Applications/Gouda.app
+            ```
+          releaseDraft: false
+          prerelease: false
