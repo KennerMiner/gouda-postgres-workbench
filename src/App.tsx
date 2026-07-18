@@ -65,6 +65,13 @@ type QueryTab = {
 const WIN_LABEL = getCurrentWindow().label;
 const SESSION_KEY = WIN_LABEL === "main" ? "session" : `session:${WIN_LABEL}`;
 
+// How this window was opened (set by open_new_window's URL query):
+//   ?profile=<id> → connect to that profile ("same connection", ⌘⇧N)
+//   ?connect=none → open blank, show connection manager ("no connection", ⌘N)
+const LAUNCH_PARAMS = new URLSearchParams(window.location.search);
+const LAUNCH_PROFILE_ID = Number(LAUNCH_PARAMS.get("profile")) || null;
+const LAUNCH_NO_CONNECT = LAUNCH_PARAMS.get("connect") === "none";
+
 const DEFAULT_SQL =
   "select table_name, table_type from information_schema.tables where table_schema = 'public' order by 1;";
 
@@ -215,12 +222,21 @@ function App() {
     [],
   );
 
-  // Daily-driver behavior: connect to the most recently used profile on launch.
+  // Launch behavior. Default (and the main window): connect to the most
+  // recently used profile. A window opened with ⌘N asks for no connection;
+  // one opened with ⌘⇧N asks for a specific profile ("same connection").
   useEffect(() => {
     (async () => {
       try {
         const list = await refreshProfiles();
-        if (list.length > 0) await connectProfile(list[0]);
+        if (LAUNCH_NO_CONNECT) {
+          setShowConnections(true);
+          return;
+        }
+        const target = LAUNCH_PROFILE_ID
+          ? list.find((p) => p.id === LAUNCH_PROFILE_ID)
+          : list[0];
+        if (target) await connectProfile(target);
         else setShowConnections(true);
       } catch {
         // Connect error already surfaced via connError.
@@ -732,9 +748,14 @@ function App() {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "t") {
         e.preventDefault();
         addTab();
-      } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === "n" || e.key === "N")) {
+      } else if ((e.metaKey || e.ctrlKey) && (e.key === "n" || e.key === "N")) {
+        // ⌘⇧N → new window on the same connection; ⌘N → new blank window.
         e.preventDefault();
-        invoke("open_new_window").catch(() => {});
+        const query =
+          e.shiftKey && activeProfileRef.current?.id
+            ? `profile=${activeProfileRef.current.id}`
+            : "connect=none";
+        invoke("open_new_window", { query }).catch(() => {});
       } else if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
         setShowPalette((v) => !v);
@@ -1145,9 +1166,19 @@ function App() {
       id: "new-window",
       label: "New window",
       group: "cmd",
-      hint: "⌘⇧N — separate connection",
-      run: () => invoke("open_new_window").catch(() => {}),
+      hint: "⌘N — no connection",
+      run: () => invoke("open_new_window", { query: "connect=none" }).catch(() => {}),
     });
+    if (activeProfile?.id) {
+      items.push({
+        id: "new-window-same",
+        label: "New window (same connection)",
+        group: "cmd",
+        hint: "⌘⇧N",
+        run: () =>
+          invoke("open_new_window", { query: `profile=${activeProfile.id}` }).catch(() => {}),
+      });
+    }
     for (const o of objects) {
       items.push({
         id: `open:${o.schema}.${o.name}`,

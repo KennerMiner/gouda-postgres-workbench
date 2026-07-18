@@ -113,7 +113,8 @@ builds auto-sign with your first available identity via `scripts/dev-run.sh`.
 | ⌘⇧↵ | run all statements |
 | ⌘E | explain statement under cursor |
 | ⌘K | command palette |
-| ⌘T / ⌘⇧N | new tab / new window |
+| ⌘T | new tab |
+| ⌘N / ⌘⇧N | new window (no connection / same connection) |
 | Tab | accept completion |
 | ↑↓←→ / ⌘C / Esc | grid navigation / copy / clear |
 | Enter / Space | edit cell / inspect cell |

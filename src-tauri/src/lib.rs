@@ -21,13 +21,23 @@ static WINDOW_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU
 
 /// A fresh window with its own connection — the window boundary is the
 /// guard against "oops, wrong server" tab confusion.
+///
+/// `query` is appended to the window's URL so the new window knows how to
+/// start up: `?profile=<id>` connects to that profile (⌘⇧N "same
+/// connection"), `?connect=none` opens the connection manager without
+/// auto-connecting (⌘N "no connection"). `None` keeps default launch
+/// behavior (connect to the most-recently-used profile).
 #[tauri::command]
-async fn open_new_window(app: tauri::AppHandle) -> Result<(), String> {
+async fn open_new_window(app: tauri::AppHandle, query: Option<String>) -> Result<(), String> {
     let n = WINDOW_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let path = match query.as_deref() {
+        Some(q) if !q.is_empty() => format!("index.html?{q}"),
+        _ => "index.html".to_string(),
+    };
     let builder = tauri::WebviewWindowBuilder::new(
         &app,
         format!("win-{n}"),
-        tauri::WebviewUrl::default(),
+        tauri::WebviewUrl::App(path.into()),
     )
     .title("psqlViewer")
     .inner_size(1150.0, 760.0)

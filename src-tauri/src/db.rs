@@ -369,6 +369,11 @@ pub async fn open_config(
     if config.get_connect_timeout().is_none() {
         config.connect_timeout(std::time::Duration::from_secs(10));
     }
+    // Identify ourselves in pg_stat_activity.application_name (like DBeaver/psql
+    // do), unless the DSN already set one explicitly.
+    if config.get_application_name().is_none() {
+        config.application_name(&format!("Gouda {}", env!("CARGO_PKG_VERSION")));
+    }
     let client = pg_connect(&config, ssl).await?;
 
     let row = client
