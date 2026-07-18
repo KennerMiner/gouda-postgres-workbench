@@ -13,6 +13,20 @@ describe("splitStatements", () => {
     expect(stmts("select 1;\n\n")).toEqual(["select 1"]);
   });
 
+  it("splits a DELETE + several INSERTs with string literals", () => {
+    // Regression: this buffer used to reach the extended protocol whole and
+    // fail with "cannot insert multiple commands into a prepared statement".
+    const script =
+      "DELETE FROM ages;\n" +
+      "INSERT INTO ages (name, age) VALUES ('Bayley', 24);\n" +
+      "INSERT INTO ages (name, age) VALUES ('Jayda', 16);\n";
+    expect(stmts(script)).toEqual([
+      "DELETE FROM ages",
+      "INSERT INTO ages (name, age) VALUES ('Bayley', 24)",
+      "INSERT INTO ages (name, age) VALUES ('Jayda', 16)",
+    ]);
+  });
+
   it("ignores semicolons in single-quoted strings, with '' escapes", () => {
     expect(stmts("select 'a;b'; select 'it''s; fine';")).toEqual([
       "select 'a;b'",

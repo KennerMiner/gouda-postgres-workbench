@@ -426,6 +426,9 @@ function App() {
   }, [historyFilter]);
   const loadHistoryRef = useRef(loadHistory);
   loadHistoryRef.current = loadHistory;
+  // Set below, once runScript is defined. Declared here so runSql can delegate
+  // a multi-statement buffer to it without a forward-reference (TDZ) error.
+  const runScriptRef = useRef<((text: string, tabId?: number) => Promise<void>) | null>(null);
 
   useEffect(() => {
     if (sideTab === "history") loadHistory();
@@ -440,6 +443,17 @@ function App() {
       const connId = opts?.connId ?? connRef.current?.connId;
       if (!connId) return Promise.resolve(false);
       const id = tabId ?? activeTabIdRef.current;
+
+      // A buffer with several statements (e.g. a selection spanning them) can't
+      // go through the extended protocol as one prepared statement — Postgres
+      // rejects it with "cannot insert multiple commands into a prepared
+      // statement". Run them sequentially instead.
+      if (!opts?.retried) {
+        const parts = splitStatements(text)
+          .map((r) => text.slice(r.from, r.to).trim())
+          .filter(Boolean);
+        if (parts.length > 1) return runScriptRef.current!(text, id).then(() => true);
+      }
 
       // psql-style backslash commands are client-side macros — translate.
       const meta = translateMeta(text);
@@ -664,6 +678,7 @@ function App() {
     },
     [runSql],
   );
+  runScriptRef.current = runScript;
 
   /** EXPLAIN a statement into the tab's plan view. */
   const explainStmt = useCallback(
