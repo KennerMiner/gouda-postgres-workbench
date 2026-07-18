@@ -421,6 +421,22 @@ body,
   }
 }
 
+/* Brief green wash on a sidebar row a statement just created or modified,
+   fading back to transparent. selected rows keep their solid fill. */
+@keyframes sidebar-flash {
+  from {
+    background-color: rgba(76, 175, 80, 0.55);
+  }
+  to {
+    background-color: rgba(76, 175, 80, 0);
+  }
+}
+
+.item-row.flash:not(.selected),
+.schema-row.flash {
+  animation: sidebar-flash 1.8s ease-out;
+}
+
 .tab.dragging {
   opacity: 0.45;
 }

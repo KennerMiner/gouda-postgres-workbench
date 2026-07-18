@@ -23,7 +23,13 @@ import "./App.css";
 type QueryEvent =
   | { kind: "meta"; columns: ColumnMeta[]; editable: EditableInfo | null }
   | { kind: "rows"; rows: unknown[][] }
-  | { kind: "done"; rowCount: number; elapsedMs: number; truncated?: boolean }
+  | {
+      kind: "done";
+      rowCount: number;
+      elapsedMs: number;
+      truncated?: boolean;
+      commandTag?: string | null;
+    }
   | { kind: "error"; message: string };
 
 type ConnInfo = { connId: number; serverVersion: string; user: string; database: string };
@@ -95,6 +101,55 @@ function timeAgo(ms: number): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+/** Strip leading line/block comments and whitespace from a statement. */
+function stripLeadingComments(sql: string): string {
+  let s = sql.trimStart();
+  for (;;) {
+    if (s.startsWith("--")) s = s.slice(s.indexOf("\n") + 1 || s.length).trimStart();
+    else if (s.startsWith("/*")) {
+      const end = s.indexOf("*/");
+      s = end < 0 ? "" : s.slice(end + 2).trimStart();
+    } else break;
+  }
+  return s;
+}
+
+const IDENT = `(?:"[^"]+"|[A-Za-z_][\\w$]*)`;
+const TABLEREF = `(${IDENT}(?:\\s*\\.\\s*${IDENT})?)`;
+// Each pattern captures the table the statement acts on. Order matters:
+// INDEX targets the table after ON, everything else the first ref.
+const MUTATION_PATTERNS = [
+  new RegExp(`^insert\\s+into\\s+${TABLEREF}`, "i"),
+  new RegExp(`^update\\s+(?:only\\s+)?${TABLEREF}`, "i"),
+  new RegExp(`^delete\\s+from\\s+(?:only\\s+)?${TABLEREF}`, "i"),
+  new RegExp(`^truncate\\s+(?:table\\s+)?(?:only\\s+)?${TABLEREF}`, "i"),
+  new RegExp(
+    `^create\\s+(?:(?:global|local)\\s+)?(?:temp(?:orary)?\\s+|unlogged\\s+)?table\\s+(?:if\\s+not\\s+exists\\s+)?${TABLEREF}`,
+    "i",
+  ),
+  new RegExp(`^drop\\s+table\\s+(?:if\\s+exists\\s+)?${TABLEREF}`, "i"),
+  new RegExp(`^alter\\s+table\\s+(?:if\\s+exists\\s+)?(?:only\\s+)?${TABLEREF}`, "i"),
+  new RegExp(
+    `^create\\s+(?:or\\s+replace\\s+)?(?:temp(?:orary)?\\s+)?(?:materialized\\s+)?view\\s+(?:if\\s+not\\s+exists\\s+)?${TABLEREF}`,
+    "i",
+  ),
+  new RegExp(`^drop\\s+(?:materialized\\s+)?view\\s+(?:if\\s+exists\\s+)?${TABLEREF}`, "i"),
+  // CREATE/DROP INDEX … ON <table> — highlight the underlying table.
+  new RegExp(`\\bon\\s+(?:only\\s+)?${TABLEREF}`, "i"),
+];
+
+/** The schema-qualified table a DDL/DML statement acts on, if identifiable. */
+function affectedTable(sql: string): { schema?: string; name: string } | null {
+  const s = stripLeadingComments(sql);
+  for (const re of MUTATION_PATTERNS) {
+    const m = re.exec(s);
+    if (!m) continue;
+    const parts = m[1].split(".").map((p) => p.trim().replace(/^"|"$/g, "").replace(/""/g, '"'));
+    return parts.length > 1 ? { schema: parts[0], name: parts[1] } : { name: parts[0] };
+  }
+  return null;
+}
+
 /** Tab title from the query's main target table, else a generic name. */
 function tabTitle(sql: string, fallback: string): string {
   const m = /(?:from|into|update|table)\s+([\w".]+)/i.exec(sql);
@@ -137,6 +192,10 @@ function App() {
   const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Sidebar keys briefly highlighted after a DDL/DML statement touches them.
+  // Table key = `${schema}.${name}`; schema-header key = `schema:${schema}`.
+  const [flash, setFlash] = useState<Set<string>>(new Set());
+  const flashTimer = useRef<number | undefined>(undefined);
   const [selected, setSelected] = useState<string>("");
   const [sideTab, setSideTab] = useState<"items" | "queries" | "history">("items");
   const [snippetFilter, setSnippetFilter] = useState("");
@@ -198,6 +257,65 @@ function App() {
       throw e;
     }
   }, []);
+
+  // Reload the sidebar object list + autocomplete catalog after a structural
+  // change (CREATE/DROP/ALTER). Returns the fresh list so callers can locate a
+  // just-created object to highlight.
+  const reloadObjects = useCallback(async (): Promise<DbObject[]> => {
+    const connId = connRef.current?.connId;
+    if (!connId) return objectsRef.current;
+    const objs = await invoke<DbObject[]>("list_objects", { connId });
+    setObjects(objs);
+    objectsRef.current = objs;
+    try {
+      const catalog = await invoke<CatalogTable[]>("schema_catalog", { connId });
+      setCatalog(catalog);
+      setSchemaNs(buildNamespace(catalog));
+    } catch {
+      // completions just stay stale; non-fatal
+    }
+    return objs;
+  }, []);
+
+  // Briefly highlight sidebar rows (re-triggerable: clear, then set next frame
+  // so the CSS fade animation restarts even for the same key).
+  const triggerFlash = useCallback((keys: string[]) => {
+    if (!keys.length) return;
+    window.clearTimeout(flashTimer.current);
+    setFlash(new Set());
+    requestAnimationFrame(() => {
+      setFlash(new Set(keys));
+      flashTimer.current = window.setTimeout(() => setFlash(new Set()), 1800);
+    });
+  }, []);
+
+  // After a DDL/DML statement completes, reveal (for CREATE) and highlight the
+  // affected table in the sidebar, along with its schema header.
+  const onSchemaMutation = useCallback(
+    async (commandTag: string, sql: string) => {
+      const target = affectedTable(sql);
+      if (!target) return;
+      const verb = commandTag.split(/\s+/)[0]?.toUpperCase();
+      const structural = verb === "CREATE" || verb === "DROP" || verb === "ALTER";
+      const list = structural ? await reloadObjects().catch(() => objectsRef.current) : objectsRef.current;
+      if (verb === "DROP") return; // nothing left to highlight
+      const match = list.find(
+        (o) =>
+          o.name === target.name && (target.schema ? o.schema === target.schema : true),
+      );
+      if (!match) return;
+      const key = `${match.schema}.${match.name}`;
+      // Make sure the schema group is expanded so the highlight is visible.
+      setCollapsed((prev) => {
+        if (!prev.has(match.schema)) return prev;
+        const next = new Set(prev);
+        next.delete(match.schema);
+        return next;
+      });
+      triggerFlash([key, `schema:${match.schema}`]);
+    },
+    [reloadObjects, triggerFlash],
+  );
 
   const saveProfile = useCallback(
     async (p: Profile, password: string | null): Promise<Profile> => {
@@ -410,13 +528,17 @@ function App() {
             // Defensive: a field mismatch from the backend must never kill
             // the rest of the handler (learned the hard way — see git log).
             const n = ev.rowCount ?? 0;
-            updateTab(id, {
-              status: ev.truncated
-                ? `first ${n.toLocaleString()} rows (capped — refine the query or export) in ${ev.elapsedMs ?? "?"} ms`
-                : `${n.toLocaleString()} row${n === 1 ? "" : "s"} in ${ev.elapsedMs ?? "?"} ms`,
-              running: false,
-            });
+            const ms = ev.elapsedMs ?? "?";
+            // A command tag means the statement returned no grid (DDL/DML) —
+            // show "CREATE TABLE" / "INSERT 5" instead of a bare "0 rows".
+            const status = ev.commandTag
+              ? `${ev.commandTag} in ${ms} ms`
+              : ev.truncated
+                ? `first ${n.toLocaleString()} rows (capped — refine the query or export) in ${ms} ms`
+                : `${n.toLocaleString()} row${n === 1 ? "" : "s"} in ${ms} ms`;
+            updateTab(id, { status, running: false });
             loadHistoryRef.current();
+            if (ev.commandTag) onSchemaMutation(ev.commandTag, text);
             resolve(true);
             break;
           }
@@ -460,7 +582,7 @@ function App() {
       });
       });
     },
-    [connectProfile, updateTab],
+    [connectProfile, updateTab, onSchemaMutation],
   );
   const runSqlRef = useRef(runSql);
   runSqlRef.current = runSql;
@@ -1389,7 +1511,10 @@ function App() {
                 <div className="schema-row server-head">Schemas</div>
                 {schemas.map(([schema, items]) => (
                   <div key={schema}>
-                    <div className="schema-row" onClick={() => toggleSchema(schema)}>
+                    <div
+                      className={`schema-row ${flash.has(`schema:${schema}`) ? "flash" : ""}`}
+                      onClick={() => toggleSchema(schema)}
+                    >
                       <span className="chevron">{collapsed.has(schema) ? "›" : "⌄"}</span>
                       {schema}
                       <span className="count">{items.length}</span>
@@ -1402,7 +1527,7 @@ function App() {
                         return (
                           <div key={key}>
                             <div
-                              className={`item-row ${selected === key ? "selected" : ""}`}
+                              className={`item-row ${selected === key ? "selected" : ""} ${flash.has(key) ? "flash" : ""}`}
                               onClick={() => openObject(o)}
                               title={`${o.kind} ${key}`}
                             >

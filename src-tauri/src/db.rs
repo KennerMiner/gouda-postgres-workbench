@@ -346,8 +346,53 @@ pub enum QueryEvent {
         editable: Option<EditableInfo>,
     },
     Rows { rows: Vec<Vec<J>> },
-    Done { row_count: usize, elapsed_ms: u64, truncated: bool },
+    Done {
+        row_count: usize,
+        elapsed_ms: u64,
+        truncated: bool,
+        /// psql-style completion tag for statements that return no rows
+        /// (`CREATE TABLE`, `INSERT 5`, `UPDATE 3`…). `None` for queries that
+        /// produce a result grid — there `row_count` speaks for itself.
+        command_tag: Option<String>,
+    },
     Error { message: String },
+}
+
+/// Reconstruct a psql-style command tag for a non-row-returning statement.
+/// tokio-postgres 0.7.18 exposes `rows_affected()` but not the server's tag
+/// string, so we derive the verb from the SQL and append the affected count
+/// for DML. Leading line/block comments are skipped.
+fn command_tag(sql: &str, rows_affected: Option<u64>) -> String {
+    let mut s = sql.trim_start();
+    loop {
+        if let Some(rest) = s.strip_prefix("--") {
+            s = rest.splitn(2, '\n').nth(1).unwrap_or("").trim_start();
+        } else if let Some(rest) = s.strip_prefix("/*") {
+            s = rest.splitn(2, "*/").nth(1).unwrap_or("").trim_start();
+        } else {
+            break;
+        }
+    }
+    let mut words = s.split_whitespace();
+    let w1 = words.next().unwrap_or("").to_uppercase();
+    let w2 = words.next().unwrap_or("");
+    let n = rows_affected.unwrap_or(0);
+    match w1.as_str() {
+        "" => "Statement executed".to_string(),
+        "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "SELECT" | "MOVE" | "FETCH" | "COPY" => {
+            format!("{w1} {n}")
+        }
+        "CREATE" | "DROP" | "ALTER" => {
+            // Append the object keyword (TABLE, INDEX, VIEW…) when the next
+            // token is a bare word rather than a name/paren/quote.
+            if !w2.is_empty() && w2.chars().all(|c| c.is_ascii_alphabetic()) {
+                format!("{w1} {}", w2.to_uppercase())
+            } else {
+                w1
+            }
+        }
+        other => other.to_string(),
+    }
 }
 
 #[derive(Serialize)]
@@ -1052,7 +1097,7 @@ pub async fn run_query(
     };
     let client: &Client = &session;
 
-    let result: Result<(usize, bool), String> = async {
+    let result: Result<(usize, bool, Option<String>), String> = async {
         let stmt = client.prepare(&sql).await.map_err(|e| pg_err(&e))?;
 
         let columns: Vec<ColumnMeta> = stmt
@@ -1118,13 +1163,21 @@ pub async fn run_query(
                 .send(QueryEvent::Rows { rows: batch })
                 .map_err(|e| e.to_string())?;
         }
-        Ok((total, truncated))
+        // Non-row-returning statements (DDL/DML) have no columns; surface a
+        // completion tag so the UI can confirm success instead of showing an
+        // empty grid. `rows_affected()` is set once CommandComplete arrives.
+        let command_tag = if ncols == 0 {
+            Some(command_tag(&sql, stream.rows_affected()))
+        } else {
+            None
+        };
+        Ok((total, truncated, command_tag))
     }
     .await;
 
     let elapsed = start.elapsed().as_millis() as i64;
     match result {
-        Ok((total, truncated)) => {
+        Ok((total, truncated, command_tag)) => {
             // Record BEFORE emitting Done: the frontend refreshes its history
             // list on Done, so the row must already be committed.
             crate::history::record(
@@ -1140,6 +1193,7 @@ pub async fn run_query(
                 row_count: total,
                 elapsed_ms: elapsed as u64,
                 truncated,
+                command_tag,
             });
         }
         Err(message) => {
@@ -1252,6 +1306,28 @@ mod tests {
             .expect("connect");
         tokio::spawn(connection);
         client
+    }
+
+    #[test]
+    fn command_tag_reconstructs() {
+        assert_eq!(command_tag("create table foo (id int)", None), "CREATE TABLE");
+        assert_eq!(
+            command_tag("CREATE TABLE IF NOT EXISTS s.foo ()", None),
+            "CREATE TABLE"
+        );
+        assert_eq!(command_tag("drop table foo", None), "DROP TABLE");
+        assert_eq!(command_tag("alter table foo add column x int", None), "ALTER TABLE");
+        assert_eq!(command_tag("insert into foo values (1)", Some(5)), "INSERT 5");
+        assert_eq!(command_tag("UPDATE foo set x = 1", Some(3)), "UPDATE 3");
+        assert_eq!(command_tag("delete from foo", Some(0)), "DELETE 0");
+        assert_eq!(command_tag("truncate foo", None), "TRUNCATE");
+        assert_eq!(command_tag("  grant select on foo to bar", None), "GRANT");
+        // Leading comments are skipped.
+        assert_eq!(
+            command_tag("-- make it\ncreate index idx on foo(x)", None),
+            "CREATE INDEX"
+        );
+        assert_eq!(command_tag("/* c */ vacuum foo", None), "VACUUM");
     }
 
     #[test]
