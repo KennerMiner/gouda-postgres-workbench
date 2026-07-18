@@ -201,10 +201,14 @@ const theme = EditorView.theme(
       fontSize: "10.5px",
     },
     ".cm-active-statement": {
-      background: "rgba(76, 175, 80, 0.07)",
-      boxShadow: "inset 2px 0 0 rgba(76, 175, 80, 0.45)",
+      background: "rgba(76, 175, 80, 0.14)",
+      boxShadow: "inset 2px 0 0 rgba(76, 175, 80, 0.7)",
     },
     ".cm-activeLine": { background: "#26282a66" },
+    // The cursor line inside the active statement: a brighter green rather than
+    // the default gray active-line, so it reads as "current line" while staying
+    // in the highlight's color family. Two classes → wins over both singles.
+    ".cm-active-statement.cm-activeLine": { background: "rgba(76, 175, 80, 0.24)" },
     ".cm-activeLineGutter": { background: "transparent", color: "#909396" },
     "&.cm-focused": { outline: "none" },
     ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
