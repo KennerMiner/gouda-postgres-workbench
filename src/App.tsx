@@ -1707,6 +1707,7 @@ function App() {
               onRunAll={runScript}
               onExplain={explainStmt}
               schema={schemaNs}
+              catalog={catalog}
             />
           </div>
 

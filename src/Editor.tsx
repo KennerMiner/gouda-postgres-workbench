@@ -7,8 +7,20 @@ import {
   autocompletion,
   completionKeymap,
   startCompletion,
+  type Completion,
+  type CompletionContext,
+  type CompletionResult,
+  type CompletionSource,
 } from "@codemirror/autocomplete";
-import { sql, PostgreSQL, type SQLNamespace } from "@codemirror/lang-sql";
+import {
+  sql,
+  PostgreSQL,
+  keywordCompletionSource,
+  schemaCompletionSource,
+  type SQLNamespace,
+} from "@codemirror/lang-sql";
+import type { CatalogTable } from "./sqlNamespace";
+import { insertColumnCandidates, insertColumnList } from "./insertCompletion";
 import {
   HighlightStyle,
   syntaxHighlighting,
@@ -39,24 +51,61 @@ const TRIGGER_WORDS = new Set([
 ]);
 
 /**
+ * Completions for `insert into t (…|` — the columns of `t`, minus any already
+ * listed, re-offered after each comma. Returns null outside that context so
+ * the schema/keyword sources take over.
+ */
+function insertColumnsSource(catalog: CatalogTable[]): CompletionSource {
+  return (context: CompletionContext): CompletionResult | null => {
+    const text = context.state.doc.sliceString(0, context.pos);
+    const cols = insertColumnCandidates(catalog, text);
+    if (!cols) return null;
+    const options: Completion[] = cols.map((c) => ({
+      label: c.name,
+      type: "property",
+      detail: c.dataType,
+    }));
+    const word = /[\w$]*$/.exec(text)![0];
+    return { from: context.pos - word.length, options, validFor: /^[\w$]*$/ };
+  };
+}
+
+/** Wrap a source so it stays quiet inside an INSERT column list. */
+function outsideInsertCols(src: CompletionSource): CompletionSource {
+  return (context) =>
+    insertColumnList(context.state.doc.sliceString(0, context.pos)) ? null : src(context);
+}
+
+/**
  * Context-triggered explicit completion: typing a space after a
  * completion-hungry keyword (or after a comma) issues the same request as
- * Ctrl-Space. Quiet inside strings/comments and while a popup is open;
- * Esc dismisses until the next trigger event.
+ * Ctrl-Space. Also fires on `(`/`,` inside an INSERT column list so the
+ * column picker pops without needing a leading keystroke. Quiet inside
+ * strings/comments; Esc dismisses until the next trigger event.
  */
 const aggressiveCompletion = EditorView.updateListener.of((u) => {
   if (!u.docChanged) return;
-  let sawSpace = false;
+  let typed = "";
   u.changes.iterChanges((_fa, _ta, _fb, _tb, ins) => {
-    if (ins.toString() === " ") sawSpace = true;
+    const s = ins.toString();
+    if (s === " " || s === "(" || s === ",") typed = s;
   });
-  if (!sawSpace) return;
+  if (!typed) return;
   const state = u.state;
   const pos = state.selection.main.head;
-  const before = state.doc.sliceString(Math.max(0, pos - 60), pos);
-  if (!before.endsWith(" ")) return;
   const node = syntaxTree(state).resolveInner(pos, -1);
   if (/string|comment/i.test(node.name)) return;
+  const fire = () => setTimeout(() => startCompletion(u.view), 0);
+
+  // `(` / `,` inside an INSERT column list → offer that table's columns.
+  if (typed === "(" || typed === ",") {
+    if (insertColumnList(state.doc.sliceString(0, pos))) fire();
+    if (typed === "(") return;
+  }
+  if (typed !== " ") return;
+
+  const before = state.doc.sliceString(Math.max(0, pos - 60), pos);
+  if (!before.endsWith(" ")) return;
   const trimmed = before.slice(0, -1).trimEnd();
   const word = /([A-Za-z_]+)$/.exec(trimmed)?.[1]?.toLowerCase();
   if (trimmed.endsWith(",") || (word !== undefined && TRIGGER_WORDS.has(word))) {
@@ -64,7 +113,7 @@ const aggressiveCompletion = EditorView.updateListener.of((u) => {
     // unconditionally — the plugin is often "pending" here on a query that
     // resolves to nothing (a bare space matches no source), and an explicit
     // startCompletion cleanly replaces it.
-    setTimeout(() => startCompletion(u.view), 0);
+    fire();
   }
 });
 
@@ -72,6 +121,24 @@ function sqlExtension(schema: SQLNamespace | null) {
   return sql({
     dialect: PostgreSQL,
     ...(schema ? { schema, defaultSchema: "public" } : {}),
+  });
+}
+
+/**
+ * Completion config. `override` replaces lang-sql's language-data sources so
+ * we control ordering: the INSERT column picker runs first, and the schema +
+ * keyword sources are gated off inside an INSERT column list.
+ */
+function completionExt(schema: SQLNamespace | null, catalog: CatalogTable[]) {
+  const cfg = { dialect: PostgreSQL, defaultSchema: "public", ...(schema ? { schema } : {}) };
+  return autocompletion({
+    activateOnTyping: true,
+    maxRenderedOptions: 60,
+    override: [
+      insertColumnsSource(catalog),
+      outsideInsertCols(schemaCompletionSource(cfg)),
+      outsideInsertCols(keywordCompletionSource(PostgreSQL)),
+    ],
   });
 }
 
@@ -152,12 +219,24 @@ type Props = {
   onExplain: (sql: string) => void;
   /** Live schema for completions; null until the catalog loads. */
   schema: SQLNamespace | null;
+  /** Raw catalog (with columns) powering INSERT column completion. */
+  catalog: CatalogTable[];
 };
 
-export default function Editor({ tabId, value, onChange, onRun, onRunAll, onExplain, schema }: Props) {
+export default function Editor({
+  tabId,
+  value,
+  onChange,
+  onRun,
+  onRunAll,
+  onExplain,
+  schema,
+  catalog,
+}: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const sqlCompartment = useRef(new Compartment());
+  const completionCompartment = useRef(new Compartment());
   // Per-tab editor states (undo history, cursor, scroll) + the extension
   // array from mount, reused when a fresh tab needs a state.
   const tabStates = useRef(new Map<number, EditorState>());
@@ -169,11 +248,13 @@ export default function Editor({ tabId, value, onChange, onRun, onRunAll, onExpl
   const onExplainRef = useRef(onExplain);
   const onChangeRef = useRef(onChange);
   const schemaRef = useRef(schema);
+  const catalogRef = useRef(catalog);
   onRunRef.current = onRun;
   onRunAllRef.current = onRunAll;
   onExplainRef.current = onExplain;
   onChangeRef.current = onChange;
   schemaRef.current = schema;
+  catalogRef.current = catalog;
 
   useEffect(() => {
     if (!host.current) return;
@@ -225,7 +306,7 @@ export default function Editor({ tabId, value, onChange, onRun, onRunAll, onExpl
       drawSelection(),
       highlightActiveLine(),
       bracketMatching(),
-      autocompletion({ activateOnTyping: true, maxRenderedOptions: 60 }),
+      completionCompartment.current.of(completionExt(null, [])),
       aggressiveCompletion,
       keymap.of([...defaultKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),
       sqlCompartment.current.of(sqlExtension(null)),
@@ -262,7 +343,12 @@ export default function Editor({ tabId, value, onChange, onRun, onRunAll, onExpl
     );
     // A stored state may carry a stale schema config — re-apply the live one.
     v.dispatch({
-      effects: sqlCompartment.current.reconfigure(sqlExtension(schemaRef.current)),
+      effects: [
+        sqlCompartment.current.reconfigure(sqlExtension(schemaRef.current)),
+        completionCompartment.current.reconfigure(
+          completionExt(schemaRef.current, catalogRef.current),
+        ),
+      ],
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabId]);
@@ -277,12 +363,15 @@ export default function Editor({ tabId, value, onChange, onRun, onRunAll, onExpl
     }
   }, [value]);
 
-  // Swap in the live schema when the catalog (re)loads.
+  // Swap in the live schema/catalog when they (re)load.
   useEffect(() => {
     view.current?.dispatch({
-      effects: sqlCompartment.current.reconfigure(sqlExtension(schema)),
+      effects: [
+        sqlCompartment.current.reconfigure(sqlExtension(schema)),
+        completionCompartment.current.reconfigure(completionExt(schema, catalog)),
+      ],
     });
-  }, [schema]);
+  }, [schema, catalog]);
 
   return <div className="editor-host" ref={host} />;
 }
