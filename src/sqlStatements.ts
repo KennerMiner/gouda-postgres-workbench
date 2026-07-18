@@ -73,11 +73,11 @@ export function splitStatements(text: string): StmtRange[] {
 }
 
 /**
- * The statement whose range contains `pos`; if `pos` sits in the gap after a
+ * The range of the statement containing `pos`; if `pos` sits in the gap after a
  * statement (e.g. right after its `;` or on a blank line below), the nearest
  * statement above is used. Returns null for an empty script.
  */
-export function statementAt(text: string, pos: number): string | null {
+export function statementRangeAt(text: string, pos: number): StmtRange | null {
   const ranges = splitStatements(text);
   if (ranges.length === 0) return null;
   let best = ranges[0];
@@ -85,5 +85,14 @@ export function statementAt(text: string, pos: number): string | null {
     if (pos >= r.from) best = r;
     else break;
   }
-  return text.slice(best.from, best.to).trim() || null;
+  return best;
+}
+
+/**
+ * The statement whose range contains `pos` (see {@link statementRangeAt}),
+ * trimmed. Returns null for an empty script.
+ */
+export function statementAt(text: string, pos: number): string | null {
+  const r = statementRangeAt(text, pos);
+  return r ? text.slice(r.from, r.to).trim() || null : null;
 }

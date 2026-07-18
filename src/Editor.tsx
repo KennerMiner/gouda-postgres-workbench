@@ -1,6 +1,16 @@
 import { useEffect, useRef } from "react";
-import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection } from "@codemirror/view";
-import { Compartment, EditorState, Prec } from "@codemirror/state";
+import {
+  EditorView,
+  keymap,
+  lineNumbers,
+  highlightActiveLine,
+  drawSelection,
+  Decoration,
+  type DecorationSet,
+  ViewPlugin,
+  type ViewUpdate,
+} from "@codemirror/view";
+import { Compartment, EditorState, Prec, RangeSetBuilder } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import {
   acceptCompletion,
@@ -28,7 +38,7 @@ import {
   syntaxTree,
 } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
-import { statementAt } from "./sqlStatements";
+import { statementAt, statementRangeAt } from "./sqlStatements";
 
 /// Keywords whose trailing space should pop the full completion list —
 /// the schema *is* the likely answer right after these.
@@ -142,6 +152,42 @@ function completionExt(schema: SQLNamespace | null, catalog: CatalogTable[]) {
   });
 }
 
+// Persistent highlight of the statement ⌘↵ would run (the one the cursor is
+// in), so the target is always visible. Suppressed when there's a selection,
+// since a selection is exactly what runs and already has its own highlight.
+const activeStatementLine = Decoration.line({ class: "cm-active-statement" });
+
+function activeStatementDecorations(view: EditorView): DecorationSet {
+  const { state } = view;
+  const builder = new RangeSetBuilder<Decoration>();
+  const sel = state.selection.main;
+  if (!sel.empty) return builder.finish();
+  const range = statementRangeAt(state.doc.toString(), sel.head);
+  if (!range || range.to <= range.from) return builder.finish();
+  const startLine = state.doc.lineAt(range.from);
+  const endLine = state.doc.lineAt(Math.max(range.from, range.to - 1));
+  for (let ln = startLine.number; ln <= endLine.number; ln++) {
+    const line = state.doc.line(ln);
+    builder.add(line.from, line.from, activeStatementLine);
+  }
+  return builder.finish();
+}
+
+const activeStatementHighlighter = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+    constructor(view: EditorView) {
+      this.decorations = activeStatementDecorations(view);
+    }
+    update(u: ViewUpdate) {
+      if (u.docChanged || u.selectionSet || u.viewportChanged) {
+        this.decorations = activeStatementDecorations(u.view);
+      }
+    }
+  },
+  { decorations: (v) => v.decorations },
+);
+
 // Palette mirrors App.css.
 const theme = EditorView.theme(
   {
@@ -153,6 +199,10 @@ const theme = EditorView.theme(
       border: "none",
       fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
       fontSize: "10.5px",
+    },
+    ".cm-active-statement": {
+      background: "rgba(76, 175, 80, 0.07)",
+      boxShadow: "inset 2px 0 0 rgba(76, 175, 80, 0.45)",
     },
     ".cm-activeLine": { background: "#26282a66" },
     ".cm-activeLineGutter": { background: "transparent", color: "#909396" },
@@ -306,6 +356,7 @@ export default function Editor({
       drawSelection(),
       highlightActiveLine(),
       bracketMatching(),
+      activeStatementHighlighter,
       completionCompartment.current.of(completionExt(null, [])),
       aggressiveCompletion,
       keymap.of([...defaultKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { splitStatements, statementAt } from "./sqlStatements";
+import { splitStatements, statementAt, statementRangeAt } from "./sqlStatements";
 
 const stmts = (text: string) =>
   splitStatements(text).map((r) => text.slice(r.from, r.to).trim());
@@ -79,5 +79,19 @@ describe("statementAt", () => {
   it("returns null for empty doc", () => {
     expect(statementAt("", 0)).toBeNull();
     expect(statementAt("  \n ", 1)).toBeNull();
+  });
+});
+
+describe("statementRangeAt", () => {
+  const text = "select 1;\nselect 2;";
+
+  it("returns the range of the statement under the cursor", () => {
+    const r = statementRangeAt(text, text.indexOf("2"));
+    expect(r).not.toBeNull();
+    expect(text.slice(r!.from, r!.to)).toBe("select 2");
+  });
+
+  it("returns null for an empty doc", () => {
+    expect(statementRangeAt("", 0)).toBeNull();
   });
 });
