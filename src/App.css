@@ -2010,6 +2010,7 @@ body.col-resizing {
 
 .statusbar .hint {
   flex: 1;
+  white-space: nowrap;
 }
 
 .statusbar .rowcount {
